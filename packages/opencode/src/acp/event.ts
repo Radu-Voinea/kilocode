@@ -1,4 +1,4 @@
-import type { AgentSideConnection } from "@agentclientprotocol/sdk"
+import type { AgentSideConnection, ClientCapabilities } from "@agentclientprotocol/sdk" // kilocode_change
 import type {
   Event,
   EventMessageUpdated, // kilocode_change
@@ -12,6 +12,7 @@ import type {
 import { Effect } from "effect"
 import { ACPSession } from "./session"
 import { ACPPermission } from "./permission"
+import { QuestionHandler } from "@/kilocode/acp/question" // kilocode_change
 import { partsToContentChunks, type ReplayPart } from "./content"
 import {
   duplicateRunningToolUpdate,
@@ -23,7 +24,7 @@ import {
 } from "./tool"
 
 type Connection = Pick<AgentSideConnection, "sessionUpdate"> &
-  Partial<Pick<AgentSideConnection, "requestPermission" | "writeTextFile">>
+  Partial<Pick<AgentSideConnection, "requestPermission" | "writeTextFile" | "unstable_createElicitation">> // kilocode_change
 type GlobalEventEnvelope = {
   payload?: Event
 }
@@ -44,6 +45,7 @@ export class Subscription {
   private readonly connectionWaiters = new Set<() => void>()
   private readonly idleWaiters = new Map<string, Set<ReturnType<typeof turn>>>() // kilocode_change
   private readonly permission: ACPPermission.Handler
+  private readonly question: QuestionHandler // kilocode_change
   private connected = false
   private started = false
 
@@ -55,7 +57,14 @@ export class Subscription {
     },
   ) {
     this.permission = new ACPPermission.Handler(input)
+    this.question = new QuestionHandler(input) // kilocode_change
   }
+
+  // kilocode_change start - questions need to know whether the client can render a form
+  setClientCapabilities(capabilities: ClientCapabilities | undefined) {
+    this.question.setClientCapabilities(capabilities)
+  }
+  // kilocode_change end
 
   start() {
     if (this.started) return
@@ -114,6 +123,11 @@ export class Subscription {
       case "permission.asked":
         this.permission.handle(event)
         return
+      // kilocode_change start
+      case "question.asked":
+        this.question.handle(event)
+        return
+      // kilocode_change end
       case "message.updated":
         this.message(event) // kilocode_change - correlate idle with this response message
         return

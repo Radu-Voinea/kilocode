@@ -50,7 +50,7 @@ export const AuthMethodID = "kilo-login" // kilocode_change
 
 export type Error = ACPError.Error
 type ServiceConnection = Pick<AgentSideConnection, "sessionUpdate"> &
-  Partial<Pick<AgentSideConnection, "requestPermission" | "writeTextFile">>
+  Partial<Pick<AgentSideConnection, "requestPermission" | "writeTextFile" | "unstable_createElicitation">> // kilocode_change
 
 export type Interface = {
   readonly initialize: (input: InitializeRequest) => Effect.Effect<InitializeResponse, Error>
@@ -94,6 +94,7 @@ export function make(input: {
   const initialize = Effect.fn("ACP.initialize")(function* (params: InitializeRequest) {
     const started = performance.now()
     // kilocode_change start
+    events?.setClientCapabilities(params.clientCapabilities)
     const authMethod: AuthMethod = {
       description: "Run `kilo auth login` in the terminal",
       name: "Login with Kilo",
