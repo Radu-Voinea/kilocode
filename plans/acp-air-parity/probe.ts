@@ -45,7 +45,7 @@ let answer: ((params: any) => Record<string, unknown>) | undefined
 const log: string[] = []
 const tag = (sessionId: string) => (!sessionId ? "-" : sessionId === root ? "root" : `ses:${sessionId.slice(-6)}`)
 const short = (value: unknown, max = 300) => {
-  const text = JSON.stringify(value)
+  const text = JSON.stringify(value) ?? "undefined"
   return text.length > max ? text.slice(0, max) + "…" : text
 }
 ;(async () => {
@@ -179,6 +179,14 @@ scenarios.mode = async () => {
   await prompt(
     "Plan a one-line change: create a file hello.txt containing the word hi. Keep the plan to two short lines, write it, and call plan_exit right away without asking me anything.",
   )
+}
+
+scenarios.compact = async () => {
+  root = (await newSession()).sessionId
+  await prompt("Say hello in five words.")
+  await prompt("/compact")
+  log.push("== load session")
+  await call("session/load", { sessionId: root, cwd, mcpServers: [] })
 }
 
 const run = scenarios[scenario]

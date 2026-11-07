@@ -164,6 +164,7 @@ export class Subscription {
 
   async replayMessage(message: SessionMessageResponse) {
     if (message.info.role !== "assistant" && message.info.role !== "user") return
+    if (await this.kilo.replay(message).catch(() => false)) return // kilocode_change
 
     const cwd = message.info.role === "assistant" ? message.info.path?.cwd : undefined
     for (const part of message.parts) {
@@ -321,6 +322,7 @@ export class Subscription {
         ? known
         : await this.fetchPartMetadata(session.id, session.cwd, props.messageID, props.partID)
     if (metadata?.role !== "assistant") return
+    if (this.kilo.delta(session.id, props.messageID, metadata.partType, props.field, props.delta)) return // kilocode_change
     if (metadata.partType === "text" && props.field === "text" && metadata.ignored !== true) {
       await this.input.connection.sessionUpdate({
         sessionId: session.id,

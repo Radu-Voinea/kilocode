@@ -1,8 +1,9 @@
 import type { AgentSideConnection, ClientCapabilities } from "@agentclientprotocol/sdk"
-import type { Event, KiloClient } from "@kilocode/sdk/v2"
+import type { Event, KiloClient, SessionMessageResponse } from "@kilocode/sdk/v2"
 import { Effect } from "effect"
 import type { ACPSession } from "@/acp/session"
-import { capabilityMeta, supports } from "./air"
+import { capabilityMeta, isAir, supports } from "./air"
+import { Compactions } from "./compaction"
 import { setClient } from "./client"
 import { Modes, type ConfigOptions } from "./modes"
 import { Plans } from "./plan"
@@ -19,6 +20,7 @@ export class Extensions {
   private readonly plans: Plans
   private readonly titles: Titles
   private readonly modes: Modes
+  private readonly compactions: Compactions
   private capabilities: ClientCapabilities | undefined
 
   constructor(
@@ -32,6 +34,7 @@ export class Extensions {
     this.plans = new Plans(input)
     this.titles = new Titles(input)
     this.modes = new Modes(input)
+    this.compactions = new Compactions(input, () => isAir(this.capabilities))
   }
 
   setClientCapabilities(capabilities: ClientCapabilities | undefined) {
@@ -65,8 +68,21 @@ export class Extensions {
       case "message.updated": {
         const info = event.properties.info
         if (info.role === "user") await this.modes.message(info)
+        if (info.role === "assistant") await this.compactions.message(info.sessionID, info)
         return
       }
+      case "message.part.updated": {
+        const part = event.properties.part
+        if (part.type !== "compaction" || !(await this.known(part.sessionID))) return
+        await this.compactions.part(part.sessionID, part)
+        return
+      }
+      case "session.compacted":
+        await this.compactions.compacted(event.properties.sessionID)
+        return
+      case "session.status":
+        if (event.properties.status.type === "idle") await this.compactions.idle(event.properties.sessionID)
+        return
       case "session.updated": {
         const info = event.properties.info
         // A subagent's name comes from `subagent_spawned`, not from its title.
@@ -76,6 +92,21 @@ export class Extensions {
         return
       }
     }
+  }
+
+  /**
+   * A streamed part delta of an assistant message. True when it belongs to one of Kilo's additions,
+   * such as a compaction summary, and must not reach the chat.
+   */
+  delta(sessionId: string, messageId: string, type: string | undefined, field: string, text: string) {
+    if (!this.compactions.owns(messageId)) return false
+    if (type === "text" && field === "text") this.compactions.delta(sessionId, messageId, text)
+    return true
+  }
+
+  /** Replays a stored message Kilo presents differently; true when it was handled. */
+  async replay(message: SessionMessageResponse) {
+    return await this.compactions.replay(message)
   }
 
   /** After a session's history was replayed to the client on load or fork. */
