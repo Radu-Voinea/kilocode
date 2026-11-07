@@ -32,7 +32,7 @@ const standard = {
 }
 
 const meta = (update: { content?: unknown }) =>
-  (update.content as Array<{ _meta?: { jetbrains: { air: { diffPatch: { text: string } } } } }>).at(-1)?._meta
+  (update.content as Array<{ _meta?: { jetbrains: { air: { diffPatch: Record<string, unknown> } } } }>).at(-1)?._meta
     ?.jetbrains.air.diffPatch
 
 describe("acp diff patches", () => {
@@ -53,7 +53,7 @@ describe("acp diff patches", () => {
   it("marks a written new file as created", () => {
     const { kilo } = harness({ capabilities: air("diffPatch") })
     const patch = createTwoFilesPatch("/work/a b.txt", "/work/a b.txt", "", "hi")
-    const text = meta(kilo.completed(part("write", patch, { exists: false }), standard))?.text
+    const text = meta(kilo.completed(part("write", patch, { exists: false }), standard))?.text as string
     expect(text?.split("\n").slice(1, 4)).toEqual(["new file mode 100644", "--- /dev/null", "+++ b/work/a b.txt\t"])
     expect(text).toContain("\\ No newline at end of file")
   })
