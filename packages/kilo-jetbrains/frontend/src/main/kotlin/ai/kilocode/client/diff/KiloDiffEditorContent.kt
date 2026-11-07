@@ -122,8 +122,13 @@ internal class DiffEditorView(
         createActionLabel(KiloBundle.message("diff.editor.refresh")) { refresh() }
         isVisible = false
     }
+    private val review = ai.kilocode.client.review.ReviewScope.from(params)
+    private val reviewBar = review?.let { ai.kilocode.client.review.ReviewBar(project, it, parent) }
     private val root = JPanel(BorderLayout()).apply {
-        add(banner, BorderLayout.NORTH)
+        val top = JPanel(BorderLayout())
+        top.add(banner, BorderLayout.NORTH)
+        reviewBar?.let { top.add(it, BorderLayout.SOUTH) }
+        add(top, BorderLayout.NORTH)
         add(splitter, BorderLayout.CENTER)
     }
     private var files = start
@@ -312,6 +317,7 @@ internal class DiffEditorView(
 
         override fun process(context: UserDataHolder, indicator: ProgressIndicator) = diffRequest(project, file, branch, labels()).also {
             it.putUserData(DIFF_FILE_KEY, file.file)
+            review?.let { scope -> it.putUserData(ai.kilocode.client.review.REVIEW_SCOPE_KEY, scope) }
         }
     }
 

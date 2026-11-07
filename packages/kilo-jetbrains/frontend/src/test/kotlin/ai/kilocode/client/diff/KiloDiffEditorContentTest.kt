@@ -653,6 +653,7 @@ class KiloDiffEditorContentTest : BasePlatformTestCase() {
 
     private fun banner(editor: DiffEditorView): EditorNotificationPanel = components(editor.component)
         .filterIsInstance<EditorNotificationPanel>()
+        .filter { it !is ai.kilocode.client.review.ReviewBar }
         .single()
 
     private fun text(tree: Tree, node: DefaultMutableTreeNode): String {

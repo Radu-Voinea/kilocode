@@ -284,8 +284,22 @@ class SessionUi(
     private var boardHasMessages = false
     private var disposed = false
 
+    // Lets a submitted code review (see KiloReviewService) reach this session.
+    private val reviewHandle = object : ai.kilocode.client.review.ReviewSessionHandle {
+        override val sessionId: String? get() = controller.id
+        override val directory: String get() = workspace.directory
+        override val title: String? get() = this@SessionUi.title()
+        override val readonly: Boolean get() = this@SessionUi.readonly || hosted
+
+        override fun submit(text: String, title: String) {
+            submitPrompt(text, clearDraft = false, injectedTitle = title)
+            manager?.focusPrompt()
+        }
+    }
+
     init {
         Disposer.register(this, popup)
+        project.service<ai.kilocode.client.review.KiloReviewService>().register(reviewHandle)
         buildUi()
         Disposer.register(this, selection)
         applyStyle(style)
@@ -1785,6 +1799,7 @@ class SessionUi(
 
     override fun dispose() {
         disposed = true
+        if (!project.isDisposed) project.service<ai.kilocode.client.review.KiloReviewService>().unregister(reviewHandle)
         refreshJob?.cancel()
         branchJob?.cancel()
         issuesJob?.cancel()
