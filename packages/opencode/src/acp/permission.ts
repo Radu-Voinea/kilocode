@@ -32,6 +32,7 @@ export class Handler {
       sdk: KiloClient
       connection: Connection
       session: ACPSession.Interface
+      target?: (sessionId: string) => string | undefined // kilocode_change - ACP session for a subagent's request
     },
   ) {}
 
@@ -51,7 +52,10 @@ export class Handler {
 
   private async process(event: PermissionEvent) {
     const permission = event.properties
-    const session = await Effect.runPromise(this.input.session.tryGet(permission.sessionID))
+    // kilocode_change start - a subagent's session is unknown here; ask in the session it reports to
+    const target = this.input.target?.(permission.sessionID) ?? permission.sessionID
+    const session = await Effect.runPromise(this.input.session.tryGet(target))
+    // kilocode_change end
     if (!session) return
 
     if (!this.input.connection.requestPermission) {
@@ -68,7 +72,8 @@ export class Handler {
         : undefined // kilocode_change
     const result = await this.input.connection
       .requestPermission({
-        sessionId: permission.sessionID,
+        sessionId: session.id, // kilocode_change - the subagent's target session
+
         toolCall: await permissionToolCall({
           toolCallId: permission.tool?.callID ?? permission.id,
           toolName: permission.permission,

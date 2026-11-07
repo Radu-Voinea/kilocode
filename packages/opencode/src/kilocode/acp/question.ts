@@ -28,6 +28,8 @@ export class QuestionHandler {
       sdk: KiloClient
       connection: Connection
       session: ACPSession.Interface
+      /** The ACP session that answers for a subagent's session, which the ACP layer doesn't know. */
+      target?: (sessionId: string) => string | undefined
     },
   ) {}
 
@@ -49,7 +51,8 @@ export class QuestionHandler {
 
   private async process(event: QuestionEvent) {
     const request = event.properties
-    const session = await Effect.runPromise(this.input.session.tryGet(request.sessionID))
+    const target = this.input.target?.(request.sessionID) ?? request.sessionID
+    const session = await Effect.runPromise(this.input.session.tryGet(target))
     if (!session) return
 
     const create = this.input.connection.unstable_createElicitation
@@ -58,7 +61,9 @@ export class QuestionHandler {
       return
     }
 
-    const result = await create.call(this.input.connection, buildElicitation(request)).catch(() => undefined)
+    // A subagent's tool call id means nothing in the session that answers for it.
+    const routed = session.id === request.sessionID ? request : { ...request, sessionID: session.id, tool: undefined }
+    const result = await create.call(this.input.connection, buildElicitation(routed)).catch(() => undefined)
 
     if (result?.action !== "accept") {
       await this.reject(request.id, session.cwd)

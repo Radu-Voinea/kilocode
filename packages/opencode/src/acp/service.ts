@@ -46,6 +46,7 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { Provider } from "@/provider/provider"
 import type { Command } from "@/command"
 import { withBuiltinCommands } from "@/kilocode/acp/commands" // kilocode_change
+import { nativeSubagentsMeta } from "@/kilocode/acp/subagents" // kilocode_change
 
 export const AuthMethodID = "kilo-login" // kilocode_change
 
@@ -131,6 +132,7 @@ export function make(input: {
           list: {},
           resume: {},
         },
+        ...(events?.nativeSubagents ? { _meta: nativeSubagentsMeta() } : {}), // kilocode_change
       },
       authMethods: [authMethod],
       agentInfo: {
@@ -271,6 +273,7 @@ export function make(input: {
     )
     const liveEntries = (yield* session.list(params.cwd ?? undefined))
       .filter((item) => !serverEntries.some((entry) => entry.sessionId === item.id))
+      .filter((item) => !events?.isSubagent(item.id)) // kilocode_change - subagents are shown inside their parent
       .map(
         (item): SessionInfo => ({
           sessionId: item.id,

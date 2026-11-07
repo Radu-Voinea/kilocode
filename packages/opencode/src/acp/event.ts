@@ -13,6 +13,7 @@ import { Effect } from "effect"
 import { ACPSession } from "./session"
 import { ACPPermission } from "./permission"
 import { QuestionHandler } from "@/kilocode/acp/question" // kilocode_change
+import { Subagents } from "@/kilocode/acp/subagents" // kilocode_change
 import { partsToContentChunks, type ReplayPart } from "./content"
 import {
   duplicateRunningToolUpdate,
@@ -46,6 +47,7 @@ export class Subscription {
   private readonly idleWaiters = new Map<string, Set<ReturnType<typeof turn>>>() // kilocode_change
   private readonly permission: ACPPermission.Handler
   private readonly question: QuestionHandler // kilocode_change
+  private readonly subagents: Subagents // kilocode_change
   private connected = false
   private started = false
 
@@ -56,13 +58,27 @@ export class Subscription {
       session: ACPSession.Interface
     },
   ) {
-    this.permission = new ACPPermission.Handler(input)
-    this.question = new QuestionHandler(input) // kilocode_change
+    // kilocode_change start - subagent sessions route their permissions and questions
+    this.subagents = new Subagents(input)
+    const target = (sessionId: string) => this.subagents.target(sessionId)
+    this.permission = new ACPPermission.Handler({ ...input, target })
+    this.question = new QuestionHandler({ ...input, target })
+    // kilocode_change end
   }
 
-  // kilocode_change start - questions need to know whether the client can render a form
+  // kilocode_change start - questions need to know whether the client can render a form, and
+  // subagents whether it shows them as sessions of their own
   setClientCapabilities(capabilities: ClientCapabilities | undefined) {
     this.question.setClientCapabilities(capabilities)
+    this.subagents.setClientCapabilities(capabilities)
+  }
+
+  get nativeSubagents() {
+    return this.subagents.enabled
+  }
+
+  isSubagent(sessionId: string) {
+    return this.subagents.isChild(sessionId)
   }
   // kilocode_change end
 
@@ -118,7 +134,10 @@ export class Subscription {
   async handle(event: Event) {
     switch (event.type) {
       case "session.status":
-        if (event.properties.status.type === "idle") this.idle(event.properties.sessionID)
+        if (event.properties.status.type === "idle") {
+          this.idle(event.properties.sessionID)
+          await this.subagents.onIdle(event.properties.sessionID) // kilocode_change
+        }
         return
       case "permission.asked":
         this.permission.handle(event)
@@ -255,7 +274,12 @@ export class Subscription {
     const part = event.properties.part
     const sessionId = part.sessionID || event.properties.sessionID
     const session = await Effect.runPromise(this.input.session.tryGet(sessionId))
-    if (!session) return
+    // kilocode_change start - a hidden subagent can still start nested subagents
+    if (!session) {
+      if (part.type === "tool") await this.subagents.onUnknownPart(sessionId, part)
+      return
+    }
+    // kilocode_change end
 
     await Effect.runPromise(
       this.input.session.recordPartMetadata({
@@ -271,6 +295,7 @@ export class Subscription {
     )
     if (part.type === "tool") {
       await this.handleToolPart(session.id, part, session.cwd)
+      if (part.tool === "task") await this.subagents.onTaskPart(session.id, part, session.cwd) // kilocode_change
     }
   }
 
