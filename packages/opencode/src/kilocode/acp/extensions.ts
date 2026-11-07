@@ -1,9 +1,10 @@
 import type { AgentSideConnection, ClientCapabilities } from "@agentclientprotocol/sdk"
-import type { Event, KiloClient, SessionMessageResponse } from "@kilocode/sdk/v2"
+import type { AssistantMessage, Event, KiloClient, SessionMessageResponse } from "@kilocode/sdk/v2"
 import { Effect } from "effect"
 import type { ACPSession } from "@/acp/session"
 import { capabilityMeta, isAir, supports } from "./air"
 import { Compactions } from "./compaction"
+import { CAPABILITY as FAILURE, Failures } from "./failures"
 import { setClient } from "./client"
 import { Modes, type ConfigOptions } from "./modes"
 import { Plans } from "./plan"
@@ -21,6 +22,7 @@ export class Extensions {
   private readonly titles: Titles
   private readonly modes: Modes
   private readonly compactions: Compactions
+  private readonly failures: Failures
   private capabilities: ClientCapabilities | undefined
 
   constructor(
@@ -35,6 +37,7 @@ export class Extensions {
     this.titles = new Titles(input)
     this.modes = new Modes(input)
     this.compactions = new Compactions(input, () => isAir(this.capabilities))
+    this.failures = new Failures(input, () => this.supports(FAILURE))
   }
 
   setClientCapabilities(capabilities: ClientCapabilities | undefined) {
@@ -54,7 +57,10 @@ export class Extensions {
 
   /** The Air capabilities the agent advertises back in `initialize`. */
   agentMeta() {
-    const names = [...(this.input.subagents.enabled ? ["nativeSubagentSessions"] : [])]
+    const names = [
+      ...(this.input.subagents.enabled ? ["nativeSubagentSessions"] : []),
+      ...(this.supports(FAILURE) ? [FAILURE] : []),
+    ]
     return capabilityMeta(names)
   }
 
@@ -80,9 +86,17 @@ export class Extensions {
       case "session.compacted":
         await this.compactions.compacted(event.properties.sessionID)
         return
-      case "session.status":
-        if (event.properties.status.type === "idle") await this.compactions.idle(event.properties.sessionID)
+      case "session.status": {
+        const id = event.properties.sessionID
+        const status = event.properties.status
+        if (status.type === "busy") this.failures.busy(id)
+        if (status.type === "retry" && (await this.known(id)))
+          await this.failures.retry(id, status.attempt, status.message)
+        if (status.type !== "idle") return
+        this.failures.idle(id)
+        await this.compactions.idle(id)
         return
+      }
       case "session.updated": {
         const info = event.properties.info
         // A subagent's name comes from `subagent_spawned`, not from its title.
@@ -102,6 +116,11 @@ export class Extensions {
     if (!this.compactions.owns(messageId)) return false
     if (type === "text" && field === "text") this.compactions.delta(sessionId, messageId, text)
     return true
+  }
+
+  /** The `_meta` that ends a failed turn as an Air session failure, or undefined to fail it as before. */
+  failed(sessionId: string, error: NonNullable<AssistantMessage["error"]>) {
+    return this.failures.failed(sessionId, error)
   }
 
   /** Replays a stored message Kilo presents differently; true when it was handled. */

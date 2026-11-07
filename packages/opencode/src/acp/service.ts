@@ -165,6 +165,10 @@ export function make(input: {
     return loaded
   })
 
+  // kilocode_change start - a failed turn becomes an Air session failure when the client shows them
+  const failed = (sessionId: string) => (error: AssistantError) => events?.extensions.failed(sessionId, error)
+  // kilocode_change end
+
   // kilocode_change start - Kilo can switch the agent or model itself, then tells the client
   events?.extensions.setConfigOptions((state) =>
     Effect.runPromise(
@@ -549,7 +553,7 @@ export function make(input: {
           "session",
         )
         yield* sendUsageUpdate(input.usage, input.sdk, input.connection, current.id, current.cwd)
-        return yield* promptResponse(response.info, params.messageId)
+        return yield* promptResponse(response.info, params.messageId, failed(current.id)) // kilocode_change
       }
 
       const known = snapshot.availableCommands.find((item) => item.name === command.name)
@@ -573,7 +577,7 @@ export function make(input: {
           "session",
         )
         yield* sendUsageUpdate(input.usage, input.sdk, input.connection, current.id, current.cwd)
-        return yield* promptResponse(response.info, params.messageId)
+        return yield* promptResponse(response.info, params.messageId, failed(current.id)) // kilocode_change
       }
 
       if (command.name === "compact") {
@@ -855,6 +859,7 @@ function detectSlashCommand(parts: ReturnType<typeof promptContentToParts>) {
 const promptResponse = Effect.fn("ACP.promptResponse")(function* (
   info: AssistantInfo,
   messageId: string | null | undefined,
+  failed?: (error: AssistantError) => Record<string, unknown> | undefined, // kilocode_change
 ) {
   if (!info?.error) {
     return {
@@ -891,6 +896,11 @@ const promptResponse = Effect.fn("ACP.promptResponse")(function* (
       ...base,
     }
   }
+
+  // kilocode_change start - Air shows the failure itself; the turn ends normally
+  const failure = failed?.(info.error)
+  if (failure) return { stopReason: "end_turn" as const, ...base, _meta: failure }
+  // kilocode_change end
 
   if (info.error.name === "ProviderAuthError") {
     return yield* new ACPError.AuthRequiredError({ providerId: info.error.data.providerID })

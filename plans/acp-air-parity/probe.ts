@@ -189,6 +189,14 @@ scenarios.compact = async () => {
   await call("session/load", { sessionId: root, cwd, mcpServers: [] })
 }
 
+// Run with PROBE_CONFIG set to a provider with a bad key, e.g.
+// PROBE_CONFIG='{"model":"openai/gpt-4o-mini","provider":{"openai":{"options":{"apiKey":"sk-bad"}}}}'
+scenarios.failure = async () => {
+  root = (await newSession()).sessionId
+  const res = await prompt("Say hi.")
+  log.push(`== response: ${short(res.result ?? res.error, 800)}`)
+}
+
 const run = scenarios[scenario]
 if (!run) {
   console.log(`unknown scenario ${scenario}; known: ${Object.keys(scenarios).join(", ")}`)
