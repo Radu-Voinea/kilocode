@@ -5,6 +5,7 @@ import type { ACPSession } from "@/acp/session"
 import { capabilityMeta, supports } from "./air"
 import { Plans } from "./plan"
 import type { Subagents } from "./subagents"
+import { Titles } from "./titles"
 
 type Connection = Pick<AgentSideConnection, "sessionUpdate">
 
@@ -14,6 +15,7 @@ type Connection = Pick<AgentSideConnection, "sessionUpdate">
  */
 export class Extensions {
   private readonly plans: Plans
+  private readonly titles: Titles
   private capabilities: ClientCapabilities | undefined
 
   constructor(
@@ -25,6 +27,7 @@ export class Extensions {
     },
   ) {
     this.plans = new Plans(input)
+    this.titles = new Titles(input)
   }
 
   setClientCapabilities(capabilities: ClientCapabilities | undefined) {
@@ -47,6 +50,14 @@ export class Extensions {
       case "todo.updated": {
         if (!(await this.known(event.properties.sessionID))) return
         await this.plans.update(event.properties.sessionID, event.properties.todos)
+        return
+      }
+      case "session.updated": {
+        const info = event.properties.info
+        // A subagent's name comes from `subagent_spawned`, not from its title.
+        if (info.parentID || this.input.subagents.isChild(info.id)) return
+        if (!(await this.known(info.id))) return
+        await this.titles.update(info)
         return
       }
     }

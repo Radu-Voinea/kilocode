@@ -134,6 +134,16 @@ const scenarios: Record<string, () => Promise<void>> = {
   },
 }
 
+scenarios.title = async () => {
+  root = (await newSession()).sessionId
+  await prompt(
+    "I am planning a weekend trip to Paris with my family and want to visit museums. We like art, history and science, and the kids are eight and eleven years old, so the visit should not be too long or too quiet for them. In one short sentence: which museum in Paris is the most famous one, and why?",
+  )
+  await Bun.sleep(8000)
+  const list = await call("session/list", { cwd })
+  log.push(`== list: ${short(list.result?.sessions?.find((s: any) => s.sessionId === root))}`)
+}
+
 const run = scenarios[scenario]
 if (!run) {
   console.log(`unknown scenario ${scenario}; known: ${Object.keys(scenarios).join(", ")}`)

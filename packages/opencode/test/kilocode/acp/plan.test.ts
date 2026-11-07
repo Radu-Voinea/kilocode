@@ -1,29 +1,10 @@
 import { describe, expect, it } from "bun:test"
-import type { AgentSideConnection } from "@agentclientprotocol/sdk"
-import type { Event, KiloClient } from "@kilocode/sdk/v2"
-import { LayerNode } from "@opencode-ai/core/effect/layer-node"
-import { Effect, ManagedRuntime } from "effect"
-import { ACPSession } from "@/acp/session"
-import { Extensions } from "@/kilocode/acp/extensions"
 import { planEntries } from "@/kilocode/acp/plan"
-import { Subagents } from "@/kilocode/acp/subagents"
+import { air, event, harness } from "./harness"
 
-type Update = Parameters<AgentSideConnection["sessionUpdate"]>[0]
+type Todo = { content: string; status: string; priority: string }
 
-function harness(todos: Array<{ content: string; status: string; priority: string }> = []) {
-  const updates: Update[] = []
-  const session = ManagedRuntime.make(LayerNode.compile(ACPSession.node)).runSync(
-    ACPSession.Service.use((service) => Effect.succeed(service)),
-  )
-  const connection = { sessionUpdate: (params: Update) => (updates.push(params), Promise.resolve()) }
-  const sdk = { session: { todo: async () => ({ data: todos }) } } as unknown as KiloClient
-  const subagents = new Subagents({ connection, session })
-  const kilo = new Extensions({ sdk, connection, session, subagents })
-  return { kilo, session, updates }
-}
-
-const todo = (sessionID: string, todos: Array<{ content: string; status: string; priority: string }>) =>
-  ({ id: "evt", type: "todo.updated", properties: { sessionID, todos } }) as Event
+const todo = (sessionID: string, todos: Todo[]) => event("todo.updated", { sessionID, todos })
 
 describe("acp plan", () => {
   it("maps statuses and priorities, dropping cancelled todos", () => {
@@ -42,8 +23,8 @@ describe("acp plan", () => {
   })
 
   it("sends the full plan when a known session's todos change, once per change", async () => {
-    const { kilo, session, updates } = harness()
-    await Effect.runPromise(session.create({ id: "ses", cwd: "/work" }))
+    const { kilo, open, updates } = harness()
+    await open("ses")
     const list = [{ content: "a", status: "pending", priority: "high" }]
 
     await kilo.handle(todo("ses", list))
@@ -58,7 +39,8 @@ describe("acp plan", () => {
   })
 
   it("sends the stored plan on replay", async () => {
-    const { kilo, updates } = harness([{ content: "x", status: "in_progress", priority: "medium" }])
+    const todos = [{ content: "x", status: "in_progress", priority: "medium" }]
+    const { kilo, updates } = harness({ sdk: { session: { todo: async () => ({ data: todos }) } } })
     await kilo.replayed("ses", "/work")
     expect(updates).toEqual([
       {
@@ -69,7 +51,9 @@ describe("acp plan", () => {
   })
 
   it("advertises native subagents only when the client does", () => {
-    const { kilo } = harness()
-    expect(kilo.agentMeta()).toBeUndefined()
+    expect(harness().kilo.agentMeta()).toBeUndefined()
+    expect(harness({ capabilities: air("nativeSubagentSessions") }).kilo.agentMeta()).toEqual({
+      jetbrains: { air: { version: 1, capabilities: ["nativeSubagentSessions"] } },
+    })
   })
 })
