@@ -24,6 +24,7 @@ internal class AdvancedSettingsUi : JPanel(BorderLayout()) {
         val mode: LogConfig.ContentMode,
         val preview: Int,
         val indexWorktrees: Boolean,
+        val worktreeLocation: String = "",
     )
 
     private val level = ComboBox(DefaultComboBoxModel(LogConfig.LogLevel.all.toTypedArray()))
@@ -33,6 +34,16 @@ internal class AdvancedSettingsUi : JPanel(BorderLayout()) {
     /** Set once the user flips the toggle, so a late backend fetch cannot overwrite their choice. */
     private var touched = false
     private val indexWorktrees = SettingsToggle { touched = true }
+    private var locationTouched = false
+    private val worktreeLocation = JBTextField().apply {
+        columns = 24
+        emptyText.text = WORKTREE_LOCATION_DEFAULT
+        document.addDocumentListener(object : com.intellij.ui.DocumentAdapter() {
+            override fun textChanged(e: javax.swing.event.DocumentEvent) {
+                locationTouched = true
+            }
+        })
+    }
 
     private var saved = current()
 
@@ -64,6 +75,12 @@ internal class AdvancedSettingsUi : JPanel(BorderLayout()) {
                 KiloBundle.message("settings.advanced.indexWorktrees.description"),
                 indexWorktrees,
             ))
+            row(TitledSeparator(KiloBundle.message("settings.advanced.worktrees.title")))
+            row(SettingsRow(
+                KiloBundle.message("settings.advanced.worktreeLocation.title"),
+                KiloBundle.message("settings.advanced.worktreeLocation.description"),
+                worktreeLocation,
+            ))
         }
         add(rows, BorderLayout.CENTER)
     }
@@ -72,6 +89,7 @@ internal class AdvancedSettingsUi : JPanel(BorderLayout()) {
         if (level.selectedItem != saved.level) return true
         if (mode.selectedItem != saved.mode) return true
         if (indexWorktrees.isSelected != saved.indexWorktrees) return true
+        if (worktreeLocation.text.trim() != saved.worktreeLocation) return true
         return preview.text.trim() != saved.preview.toString()
     }
 
@@ -88,7 +106,9 @@ internal class AdvancedSettingsUi : JPanel(BorderLayout()) {
         mode.selectedItem = saved.mode
         preview.text = saved.preview.toString()
         indexWorktrees.isSelected = saved.indexWorktrees
+        worktreeLocation.text = saved.worktreeLocation
         touched = false
+        locationTouched = false
     }
 
     fun sync() {
@@ -101,6 +121,7 @@ internal class AdvancedSettingsUi : JPanel(BorderLayout()) {
         mode = mode.selectedItem as LogConfig.ContentMode,
         preview = count() ?: saved.preview,
         indexWorktrees = indexWorktrees.isSelected,
+        worktreeLocation = worktreeLocation.text.trim(),
     )
 
     /** The index-worktrees value as of the last [sync] (or the initial fetch via [refreshIndexWorktrees]). */
@@ -116,6 +137,17 @@ internal class AdvancedSettingsUi : JPanel(BorderLayout()) {
         if (touched) return
         saved = saved.copy(indexWorktrees = value)
         indexWorktrees.isSelected = value
+    }
+
+    fun savedWorktreeLocation(): String = saved.worktreeLocation
+
+    /** Like [refreshIndexWorktrees], for the worktree location fetched from the backend. */
+    @RequiresEdt
+    fun refreshWorktreeLocation(value: String) {
+        if (locationTouched) return
+        saved = saved.copy(worktreeLocation = value)
+        worktreeLocation.text = value
+        locationTouched = false
     }
 
     private fun current(): Values = Values(LogConfig.level(), LogConfig.contentMode(), LogConfig.previewMax(), indexWorktrees = false)
@@ -159,3 +191,5 @@ internal class AdvancedSettingsUi : JPanel(BorderLayout()) {
         )
     }
 }
+
+private const val WORKTREE_LOCATION_DEFAULT = ".kilo/worktrees"

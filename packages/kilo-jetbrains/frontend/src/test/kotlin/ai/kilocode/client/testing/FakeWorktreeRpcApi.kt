@@ -215,6 +215,22 @@ class FakeWorktreeRpcApi : KiloWorktreeRpcApi {
         return adoptResult(path, name)
     }
 
+    val added = CopyOnWriteArrayList<String>()
+    val hidden = CopyOnWriteArrayList<String>()
+    var addExistingResult: CreateWorktreeResultDto? = null
+
+    override suspend fun addExisting(directory: String, path: String): CreateWorktreeResultDto {
+        assertNotEdt("addExisting")
+        added.add(path)
+        return addExistingResult ?: CreateWorktreeResultDto(worktree = WorktreeDto(path, path.substringAfterLast('/'), "(detached)", path))
+    }
+
+    override suspend fun hide(directory: String, path: String): Boolean {
+        assertNotEdt("hide")
+        hidden.add(path)
+        return listed.removeIf { it.path == path }
+    }
+
     override suspend fun reorder(directory: String, paths: List<String>): Boolean {
         assertNotEdt("reorder")
         reorders.add(paths)

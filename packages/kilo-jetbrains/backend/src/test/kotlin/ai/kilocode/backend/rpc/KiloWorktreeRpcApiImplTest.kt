@@ -777,7 +777,7 @@ class KiloWorktreeRpcApiImplTest {
     }
 
     @Test
-    fun `managedWorktrees keeps only agent manager worktrees`() {
+    fun `managedWorktrees lists every worktree and marks only agent manager ones as created`() {
         val raw = """
             worktree /repo
             HEAD 1111111111111111111111111111111111111111
@@ -797,13 +797,20 @@ class KiloWorktreeRpcApiImplTest {
 
         """.trimIndent()
 
-        val list = managedWorktrees(parseWorktreeList(raw))
+        val list = managedWorktrees(parseWorktreeList(raw), created = listOf("/repo/sibling"))
 
-        assertEquals(listOf("/repo", "/repo/.kilo/worktrees/feature-x"), list.map { it.path })
+        assertEquals(
+            listOf("/repo", "/repo/.kilo/worktrees/feature-x", "/Users/kirillk/Library/Caches/JetBrains/Air/agents/air/task/repo", "/repo/sibling"),
+            list.map { it.path },
+        )
+        assertEquals(listOf(true, false, true), list.drop(1).map { it.created })
+
+        val hidden = managedWorktrees(parseWorktreeList(raw), hidden = listOf("/repo/sibling"))
+        assertTrue(hidden.none { it.path == "/repo/sibling" })
     }
 
     @Test
-    fun `managedWorktrees rejects the storage root itself`() {
+    fun `managedWorktrees never counts the storage root itself as created`() {
         val raw = """
             worktree /repo
             HEAD 1111111111111111111111111111111111111111
@@ -817,11 +824,12 @@ class KiloWorktreeRpcApiImplTest {
 
         val list = managedWorktrees(parseWorktreeList(raw))
 
-        assertEquals(listOf("/repo"), list.map { it.path })
+        assertEquals(listOf("/repo", "/repo/.kilo/worktrees"), list.map { it.path })
+        assertFalse(list.last().created)
     }
 
     @Test
-    fun `managedWorktrees rejects nested and prunable worktrees`() {
+    fun `managedWorktrees drops prunable worktrees and does not count nested ones as created`() {
         val raw = """
             worktree /repo
             HEAD 1111111111111111111111111111111111111111
@@ -844,7 +852,11 @@ class KiloWorktreeRpcApiImplTest {
 
         val list = managedWorktrees(parseWorktreeList(raw))
 
-        assertEquals(listOf("/repo", "/repo/.kilo/worktrees/feature-x"), list.map { it.path })
+        assertEquals(
+            listOf("/repo", "/repo/.kilo/worktrees/feature-x", "/repo/.kilo/worktrees/feature-x/.kilo/worktrees/nested"),
+            list.map { it.path },
+        )
+        assertEquals(listOf(true, false), list.drop(1).map { it.created })
     }
 
     @Test

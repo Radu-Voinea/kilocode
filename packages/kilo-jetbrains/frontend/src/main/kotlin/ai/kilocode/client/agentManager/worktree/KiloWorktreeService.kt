@@ -175,6 +175,20 @@ class KiloWorktreeService internal constructor(
         false
     }
 
+    suspend fun addExisting(directory: String, path: String): CreateWorktreeResultDto = try {
+        call { addExisting(directory, path) }
+    } catch (e: Exception) {
+        LOG.warn("worktree add existing failed for $path", e)
+        CreateWorktreeResultDto(error = e.message ?: "adding the worktree failed")
+    }
+
+    suspend fun hide(directory: String, path: String): Boolean = try {
+        call { hide(directory, path) }
+    } catch (e: Exception) {
+        LOG.warn("worktree hide failed for $path", e)
+        false
+    }
+
     suspend fun sessionList(directory: String): Boolean? = try {
         call { sessionList(directory) }
     } catch (e: Exception) {

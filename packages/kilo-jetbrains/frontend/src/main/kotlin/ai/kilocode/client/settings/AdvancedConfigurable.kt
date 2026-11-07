@@ -39,6 +39,8 @@ class AdvancedConfigurable(
         cs.launch {
             val value = app.indexWorktrees()
             withContext(edt) { panel.refreshIndexWorktrees(value) }
+            val location = app.worktreeLocation()
+            withContext(edt) { panel.refreshWorktreeLocation(location) }
         }
         return panel
     }
@@ -53,10 +55,12 @@ class AdvancedConfigurable(
         settings.update(value.level, value.mode, value.preview)
         save(settings)
         val indexWorktreesChanged = value.indexWorktrees != panel.savedIndexWorktrees()
+        val locationChanged = value.worktreeLocation != panel.savedWorktreeLocation()
         panel.sync()
         // Runs on the app scope, not ours: OK calls apply() then disposeUIResources(), which cancels
         // this configurable's scope before a coroutine launched here could reach the RPC.
         if (indexWorktreesChanged) app.setIndexWorktreesAsync(value.indexWorktrees)
+        if (locationChanged) app.setWorktreeLocationAsync(value.worktreeLocation)
     }
 
     override fun reset() {

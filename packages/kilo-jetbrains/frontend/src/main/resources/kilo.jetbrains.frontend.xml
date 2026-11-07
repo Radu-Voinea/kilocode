@@ -420,6 +420,12 @@
         <action id="Kilo.Worktree.Delete"
                 class="ai.kilocode.client.actions.DeleteWorktreeAction"/>
 
+        <action id="Kilo.Worktree.Hide"
+                class="ai.kilocode.client.actions.HideWorktreeAction"/>
+
+        <action id="Kilo.Worktree.AddExisting"
+                class="ai.kilocode.client.actions.AddExistingWorktreeAction"/>
+
         <action id="Kilo.Worktree.OpenPr"
                 class="ai.kilocode.client.actions.OpenWorktreePrAction"/>
 
@@ -477,6 +483,9 @@
             <reference ref="Kilo.Worktree.RunSetupScript"/>
             <separator/>
             <reference ref="Kilo.Worktree.Delete"/>
+            <reference ref="Kilo.Worktree.Hide"/>
+            <separator/>
+            <reference ref="Kilo.Worktree.AddExisting"/>
         </group>
 
         <group id="Kilo.WorktreeSession.RowMenu">

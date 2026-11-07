@@ -220,6 +220,18 @@ class FakeAppRpcApi : KiloAppRpcApi {
         return indexWorktrees
     }
 
+    var worktreeLocation = ""
+
+    override suspend fun worktreeLocation(): String {
+        assertNotEdt("worktreeLocation")
+        return worktreeLocation
+    }
+
+    override suspend fun setWorktreeLocation(value: String) {
+        assertNotEdt("setWorktreeLocation")
+        worktreeLocation = value
+    }
+
     override suspend fun setIndexWorktrees(value: Boolean) {
         assertNotEdt("setIndexWorktrees")
         indexWorktreesSaveAttempts += 1

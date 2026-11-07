@@ -19,6 +19,13 @@ data class WorktreeDto(
     val remote: String? = null,
     /** False when [parentBranch] is only the current main branch, not a recorded base. */
     val parentBranchRecorded: Boolean = false,
+    /**
+     * True when Agent Manager created this worktree (it sits under `.kilo/worktrees`, or Kilo recorded
+     * creating it in the configured worktree location). Only these can be deleted from Kilo; other
+     * worktrees git reports are listed but never removed or cleaned up. The backend's remove checks
+     * this on its own; the flag only drives the UI.
+     */
+    val created: Boolean = true,
 )
 
 @Serializable

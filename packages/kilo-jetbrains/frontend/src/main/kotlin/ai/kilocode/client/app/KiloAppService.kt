@@ -401,6 +401,23 @@ class KiloAppService internal constructor(
         false
     }
 
+    /** Where Agent Manager creates new worktrees; blank means `.kilo/worktrees`. */
+    suspend fun worktreeLocation(): String = try {
+        call { worktreeLocation() }
+    } catch (e: Exception) {
+        LOG.warn("worktree location read failed", e)
+        ""
+    }
+
+    /** Persist the worktree location on the app-lifetime scope, like [setIndexWorktreesAsync]. */
+    fun setWorktreeLocationAsync(value: String): Job = cs.launch {
+        try {
+            call { setWorktreeLocation(value) }
+        } catch (e: Exception) {
+            LOG.warn("worktree location write failed", e)
+        }
+    }
+
     /**
      * Persist the worktree-indexing setting and reindex every open project. Runs on the app-lifetime
      * [scope] so the write and the reindex it triggers survive the settings dialog closing on OK.

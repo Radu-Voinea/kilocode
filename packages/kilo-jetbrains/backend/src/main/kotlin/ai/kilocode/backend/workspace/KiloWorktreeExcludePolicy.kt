@@ -26,6 +26,13 @@ internal class KiloWorktreeExcludePolicy(private val project: Project) : Directo
     override fun getExcludeUrlsForProject(): Array<String> {
         if (KiloWorktreeIndexSettings.get()) return ArrayUtil.EMPTY_STRING_ARRAY
         val base = project.basePath ?: return ArrayUtil.EMPTY_STRING_ARRAY
-        return arrayOf(VfsUtilCore.pathToUrl("$base/$WORKTREE_STORAGE"))
+        val default = "$base/$WORKTREE_STORAGE"
+        // A custom worktree location inside the project is excluded the same way; one outside it is
+        // not part of this project's index anyway.
+        val root = runCatching { java.nio.file.Path.of(base).normalize() }.getOrNull()
+        val custom = root?.let { KiloWorktreeLocationSettings.resolve(it) }
+            ?.takeIf { it != root && it.startsWith(root) }
+            ?.toString()?.replace('\\', '/')
+        return listOfNotNull(default, custom).distinct().map(VfsUtilCore::pathToUrl).toTypedArray()
     }
 }

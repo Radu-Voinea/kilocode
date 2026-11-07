@@ -380,6 +380,28 @@ class AgentManagerPanel(
 
     internal fun canDelete(item: WorktreeDto?): Boolean = deletable(item)
 
+    internal fun canHide(item: WorktreeDto?): Boolean = worktreeHideable(item, item?.id?.let(controller::progress) != null)
+
+    internal fun hide(item: WorktreeDto) {
+        if (!canHide(item)) return
+        close(item)
+        controller.hide(item)
+    }
+
+    /** Lets the user pick a folder and lists it when it is a worktree of this repository. */
+    internal fun addExisting() {
+        val target = project ?: return
+        val descriptor = com.intellij.openapi.fileChooser.FileChooserDescriptorFactory.createSingleFolderDescriptor()
+            .withTitle(KiloBundle.message("worktree.addExisting.title"))
+            .withDescription(KiloBundle.message("worktree.addExisting.description"))
+        val file = com.intellij.openapi.fileChooser.FileChooser.chooseFile(descriptor, target, null) ?: return
+        controller.addExisting(
+            file.path,
+            onSuccess = { added -> controller.onSelect?.invoke(added.id) },
+            onFailure = { err -> KiloNotifications.error(project, KiloBundle.message("worktree.addExisting.failed"), err) },
+        )
+    }
+
     internal fun canOpenPr(item: WorktreeDto?): Boolean = prDto(item) != null
 
     internal fun openPr(item: WorktreeDto) = prDto(item)?.let { BrowserUtil.browse(it.url) }
@@ -1020,4 +1042,7 @@ class AgentManagerPanel(
     }
 }
 
-internal fun worktreeDeletable(item: WorktreeDto?, busy: Boolean): Boolean = item != null && !item.main && !busy
+internal fun worktreeDeletable(item: WorktreeDto?, busy: Boolean): Boolean = item != null && !item.main && item.created && !busy
+
+/** Worktrees Kilo did not create can only be taken off the list, never deleted. */
+internal fun worktreeHideable(item: WorktreeDto?, busy: Boolean): Boolean = item != null && !item.main && !item.created && !busy

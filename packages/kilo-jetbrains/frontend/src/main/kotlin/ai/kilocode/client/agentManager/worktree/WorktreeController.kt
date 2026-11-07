@@ -344,6 +344,34 @@ class WorktreeController(
         }
     }
 
+    /** Lists the existing worktree at [path] again (see [KiloWorktreeService.addExisting]). */
+    fun addExisting(path: String, onSuccess: (WorktreeDto) -> Unit = {}, onFailure: (String) -> Unit = {}) {
+        cs.launch {
+            val result = service.addExisting(directory, path)
+            edt {
+                val added = result.worktree
+                if (added == null) {
+                    onFailure(result.error ?: path)
+                    return@edt
+                }
+                telemetry("Worktree Added Existing", emptyMap())
+                reload()
+                onSuccess(added)
+            }
+        }
+    }
+
+    /** Takes [dto] off the list; the worktree stays on disk and in git. */
+    fun hide(dto: WorktreeDto) {
+        cs.launch {
+            val changed = service.hide(directory, dto.path)
+            edt {
+                if (changed) telemetry("Worktree Hidden", emptyMap())
+                reload()
+            }
+        }
+    }
+
     fun rename(
         dto: WorktreeDto,
         name: String,

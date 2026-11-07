@@ -8,6 +8,7 @@ import ai.kilocode.backend.diff.GIT_WRITE_TIMEOUT_MS
 import ai.kilocode.backend.diff.GitComparison
 import ai.kilocode.backend.diff.runGitCommand
 import ai.kilocode.backend.worktree.WorktreeTrash
+import ai.kilocode.backend.workspace.KiloWorktreeLocationSettings
 import ai.kilocode.log.KiloLog
 import ai.kilocode.rpc.KiloWorktreeRpcApi
 import ai.kilocode.rpc.foreignPr
@@ -163,7 +164,10 @@ class KiloWorktreeRpcApiImpl(
         val reconciled = reconcile(base) ?: return@withContext WorktreeListDto()
         val alive = reconciled.items
         val store = worktreeNameStore(alive)
-        val state = store?.let { syncWorktreeState(it, worktreePaths(alive), livePaths(alive)) } ?: WorktreeState()
+        // Reconcile against every worktree git reports, not just the listed ones, so hiding a
+        // worktree does not drop its name, order, or the record that Kilo created it.
+        val known = reconciled.all.filter { !it.main }.map { it.path }
+        val state = store?.let { syncWorktreeState(it, known, reconciled.all.map { item -> item.path }) } ?: WorktreeState()
         val named = overlayWorktreeNames(alive, state.names)
         // Cheap and non-blocking: sweeps orphaned `.kilo-delete-*` directories left by an interrupted
         // delete (this plugin's or the VS Code extension's) every time the list is polled, so they do
@@ -296,7 +300,12 @@ class KiloWorktreeRpcApiImpl(
     private fun sync(root: Path): List<WorktreeDto>? = reconcile(root)?.items
 
     /** Managed worktrees of one repository, plus directories nothing claims. */
-    internal data class Reconciled(val items: List<WorktreeDto>, val orphans: List<OrphanDto>)
+    internal data class Reconciled(
+        val items: List<WorktreeDto>,
+        val orphans: List<OrphanDto>,
+        /** Every live worktree git reports, listed or not. */
+        val all: List<WorktreeDto> = items,
+    )
 
     private fun reconcile(root: Path): Reconciled? {
         if (!Files.isDirectory(root)) {
@@ -306,7 +315,8 @@ class KiloWorktreeRpcApiImpl(
         val res = runGit(root, "worktree", "list", "--porcelain")
         if (!res.ok) return null
         val raw = parseWorktreeList(res.stdout)
-        val stale = staleWorktrees(raw, trash)
+        val state = worktreeNameStore(raw)?.let { readWorktreeState(it) } ?: WorktreeState()
+        val stale = staleWorktrees(raw, trash, state.created)
         val all = if (stale.isEmpty()) raw else {
             LOG.info("worktree sync pruning stale managed worktrees: ${stale.joinToString(", ") { it.path }}")
             // Pruning rewrites the same `$GIT_DIR/worktrees` bookkeeping create/import/remove/rename
@@ -325,8 +335,9 @@ class KiloWorktreeRpcApiImpl(
                 parseWorktreeList(again.stdout)
             }
         }
-        val items = withWorktreeBases(live(managedWorktrees(all).filter { Files.isDirectory(Path.of(it.path)) }))
-        return Reconciled(items, orphanDirs(all, main(all)))
+        val items = withWorktreeBases(live(managedWorktrees(all, state.created, state.hidden).filter { Files.isDirectory(Path.of(it.path)) }))
+        val every = all.filter { !it.prunable && Files.isDirectory(Path.of(it.path)) }
+        return Reconciled(items, orphanDirs(all, main(all)), every)
     }
 
     /**
@@ -812,7 +823,11 @@ class KiloWorktreeRpcApiImpl(
             }
         }
 
-    /** Runs `git worktree add` under `<base>/.kilo/worktrees/<slug>` and records list bookkeeping. */
+    /**
+     * Runs `git worktree add` under `<location>/<slug>` and records list bookkeeping. The location is
+     * [KiloWorktreeLocationSettings] (default `<base>/.kilo/worktrees`); Kilo records each worktree it
+     * creates so it can later tell them from worktrees it must never delete.
+     */
     private fun addWorktree(
         base: Path,
         branch: String,
@@ -822,7 +837,8 @@ class KiloWorktreeRpcApiImpl(
         parentRemote: String? = null,
     ): CreateWorktreeResultDto {
         val root = mainWorktree(base)
-        val storage = root.resolve(".kilo").resolve("worktrees").normalize()
+        val storage = KiloWorktreeLocationSettings.resolve(root)
+            ?: return CreateWorktreeResultDto(error = "The worktree location in Kilo settings is not a valid path")
         val parts = branch.split('/')
         if (parts.any { it.isBlank() || it == "." || it == ".." }) return CreateWorktreeResultDto(error = "Invalid branch name")
         val dir = storage.resolve(branch.replace('/', '-')).normalize()
@@ -857,6 +873,7 @@ class KiloWorktreeRpcApiImpl(
         val store = worktreeNameStore(items) ?: base.resolve(".kilo").resolve(WORKTREE_NAMES_FILE)
         val paths = worktreePaths(items).ifEmpty { listOf(path) }
         prependWorktreeOrder(store, path, paths)
+        recordCreated(store, path)
         return CreateWorktreeResultDto(
             worktree = WorktreeDto(
                 path,
@@ -866,6 +883,7 @@ class KiloWorktreeRpcApiImpl(
                 parentBranch = parent,
                 remote = remote,
                 parentBranchRecorded = !existing && parent != null,
+                created = true,
             ),
         )
     }
@@ -885,9 +903,11 @@ class KiloWorktreeRpcApiImpl(
                 val items = managedWorktrees(all)
                 val main = all.firstOrNull { it.main }
                 val storage = main?.let { Path.of(it.path).normalize().resolve(".kilo").resolve("worktrees").normalize() }
+                val created = worktreeNameStore(all)?.let { readWorktreeState(it).created }.orEmpty()
+                // Only worktrees Kilo created: under `.kilo/worktrees`, or recorded when Kilo created
+                // them in the configured location. Anything else the user owns and Kilo never deletes.
                 val target = all.firstOrNull {
-                    val item = Path.of(it.path).normalize()
-                    !it.main && samePath(it.path, path) && item.parent == storage
+                    !it.main && samePath(it.path, path) && kiloCreated(it, main, created)
                 }
                 if (target == null) {
                     LOG.warn("worktree remove rejected: reason=unmanaged path=$path")
@@ -1246,6 +1266,54 @@ class KiloWorktreeRpcApiImpl(
                     LOG.warn("worktree adopt failed: path=$path message=${e.message}", e)
                     RenameWorktreeResultDto(error = e.message ?: "worktree adopt failed")
                 }
+            }
+        }
+
+    override suspend fun addExisting(directory: String, path: String): CreateWorktreeResultDto =
+        withContext(Dispatchers.IO) {
+            val base = Path.of(directory).normalize()
+            val wanted = try {
+                Path.of(path.trim()).normalize()
+            } catch (_: Exception) {
+                return@withContext CreateWorktreeResultDto(error = "Not a valid path: $path")
+            }
+            if (!Files.isDirectory(wanted)) return@withContext CreateWorktreeResultDto(error = "Folder not found: $wanted")
+            lock(base, "add-existing") {
+                val res = runGit(base, "worktree", "list", "--porcelain")
+                if (!res.ok) return@lock CreateWorktreeResultDto(error = res.stderr.ifBlank { "git worktree list failed" })
+                val all = parseWorktreeList(res.stdout)
+                // Git's own list is the only proof that a folder is a worktree of this repository;
+                // a checkout of another repository or a plain folder is refused, never registered.
+                val target = all.firstOrNull { !it.prunable && samePath(it.path, wanted.toString()) }
+                    ?: return@lock CreateWorktreeResultDto(error = "$wanted is not a worktree of this repository")
+                val store = worktreeNameStore(all) ?: return@lock CreateWorktreeResultDto(error = "Main worktree not found")
+                val state = readWorktreeState(store)
+                if (!target.main) {
+                    writeWorktreeState(store, state.copy(hidden = state.hidden.filter { !samePath(it, target.path) }))
+                    prependWorktreeOrder(store, target.path, worktreePaths(managedWorktrees(all)))
+                }
+                invalidate()
+                val item = managedWorktrees(all, state.created).first { samePath(it.path, target.path) }
+                LOG.info("worktree added to list: path=${target.path} created=${item.created}")
+                CreateWorktreeResultDto(worktree = overlayWorktreeNames(listOf(item), state.names).single())
+            }
+        }
+
+    override suspend fun hide(directory: String, path: String): Boolean =
+        withContext(Dispatchers.IO) {
+            val base = Path.of(directory).normalize()
+            lock(base, "hide") {
+                val res = runGit(base, "worktree", "list", "--porcelain")
+                if (!res.ok) return@lock false
+                val all = parseWorktreeList(res.stdout)
+                val target = all.firstOrNull { !it.main && samePath(it.path, path) } ?: return@lock false
+                val store = worktreeNameStore(all) ?: return@lock false
+                val state = readWorktreeState(store)
+                if (state.hidden.any { samePath(it, target.path) }) return@lock false
+                writeWorktreeState(store, state.copy(hidden = state.hidden + target.path))
+                invalidate()
+                LOG.info("worktree hidden from list: path=${target.path}")
+                true
             }
         }
 
@@ -1849,12 +1917,18 @@ private data class WorktreeNamesFile(
     val names: Map<String, String> = emptyMap(),
     val worktreeOrder: List<String> = emptyList(),
     val sessionList: Map<String, Boolean> = emptyMap(),
+    val created: List<String> = emptyList(),
+    val hidden: List<String> = emptyList(),
 )
 
 internal data class WorktreeState(
     val names: Map<String, String> = emptyMap(),
     val worktreeOrder: List<String> = emptyList(),
     val sessionList: Map<String, Boolean> = emptyMap(),
+    /** Worktrees Agent Manager created outside `.kilo/worktrees`: the only ones besides those it may delete. */
+    val created: List<String> = emptyList(),
+    /** Worktrees the user took off the list; still on disk and in git. */
+    val hidden: List<String> = emptyList(),
 ) {
     /**
      * Drops state for worktrees git no longer reports. Names and order cover linked worktrees only
@@ -1867,7 +1941,7 @@ internal data class WorktreeState(
         val order = (worktreeOrder.filter { it in set } + paths.filter { it !in worktreeOrder }).distinct()
         val next = names.filterKeys { it in set }
         val visible = sessionList.filterKeys { it in all }
-        return WorktreeState(next, order, visible)
+        return WorktreeState(next, order, visible, created.filter { it in all }, hidden.filter { it in all })
     }
 }
 
@@ -1883,7 +1957,7 @@ internal fun parseWorktreeList(raw: String): List<WorktreeDto> {
     fun flush() {
         val p = path ?: return
         val name = p.substringAfterLast('/').ifBlank { p }
-        out.add(WorktreeDto(p, name, branch, p, main = first, locked = locked, lockReason = lockReason, prunable = prunable))
+        out.add(WorktreeDto(p, name, branch, p, main = first, locked = locked, lockReason = lockReason, prunable = prunable, created = false))
         first = false
         path = null
         branch = "(detached)"
@@ -1907,10 +1981,21 @@ internal fun parseWorktreeList(raw: String): List<WorktreeDto> {
     return out
 }
 
-internal fun managedWorktrees(items: List<WorktreeDto>): List<WorktreeDto> {
+/**
+ * The worktrees Agent Manager lists: every worktree git reports, except stale entries, delete-staging
+ * siblings, and those the user hid. Each carries [WorktreeDto.created] — whether Kilo created it and
+ * so may delete it: anything under `.kilo/worktrees`, and worktrees Kilo recorded in [created].
+ */
+internal fun managedWorktrees(
+    items: List<WorktreeDto>,
+    created: Collection<String> = emptyList(),
+    hidden: Collection<String> = emptyList(),
+): List<WorktreeDto> {
     val main = items.firstOrNull { it.main } ?: return emptyList()
     val root = Path.of(main.path).normalize()
     val storage = root.resolve(".kilo").resolve("worktrees").normalize()
+    val own = created.map { Path.of(it).normalize() }.toSet()
+    val gone = hidden.map { Path.of(it).normalize() }.toSet()
     return items.filter { item ->
         if (item.main) return@filter true
         if (item.prunable) return@filter false
@@ -1919,8 +2004,19 @@ internal fun managedWorktrees(items: List<WorktreeDto>): List<WorktreeDto> {
         // `WorktreeTrash` sibling mid-reap, not a worktree: it must never be presented or acted on
         // as one, however briefly git's own metadata still names it.
         if (path.fileName?.toString()?.startsWith(WorktreeTrash.PREFIX) == true) return@filter false
-        path.parent == storage
+        path !in gone
+    }.map { item ->
+        val path = Path.of(item.path).normalize()
+        if (item.main) item else item.copy(created = path.parent == storage || path in own)
     }
+}
+
+/** Whether Kilo created [item]: it may delete only these. See [managedWorktrees]. */
+internal fun kiloCreated(item: WorktreeDto, main: WorktreeDto?, created: Collection<String>): Boolean {
+    if (item.main || main == null) return false
+    val path = Path.of(item.path).normalize()
+    val storage = Path.of(main.path).normalize().resolve(".kilo").resolve("worktrees").normalize()
+    return path.parent == storage || created.any { Path.of(it).normalize() == path }
 }
 
 /**
@@ -1932,12 +2028,15 @@ internal fun managedWorktrees(items: List<WorktreeDto>): List<WorktreeDto> {
  * stale by design (the removal renamed its directory away and will prune it itself), and letting a
  * concurrent poll's prune race that in-flight removal is pure risk for no benefit.
  */
-internal fun staleWorktrees(items: List<WorktreeDto>, trash: WorktreeTrash? = null): List<WorktreeDto> {
+internal fun staleWorktrees(
+    items: List<WorktreeDto>,
+    trash: WorktreeTrash? = null,
+    created: Collection<String> = emptyList(),
+): List<WorktreeDto> {
     val main = items.firstOrNull { it.main } ?: return emptyList()
-    val storage = Path.of(main.path).normalize().resolve(".kilo").resolve("worktrees").normalize()
     return items.filter { item ->
         if (item.main) return@filter false
-        if (Path.of(item.path).normalize().parent != storage) return@filter false
+        if (!kiloCreated(item, main, created)) return@filter false
         if (trash?.doomed(item.path) == true) return@filter false
         item.prunable || !Files.isDirectory(Path.of(item.path))
     }
@@ -2001,12 +2100,14 @@ internal fun readWorktreeState(file: Path): WorktreeState {
     return try {
         val raw = Files.readString(file)
         val element = json.parseToJsonElement(raw)
-        if (element is JsonObject && ("names" in element || "worktreeOrder" in element || "sessionList" in element)) {
+        if (element is JsonObject && listOf("names", "worktreeOrder", "sessionList", "created", "hidden").any { it in element }) {
             val data = json.decodeFromJsonElement<WorktreeNamesFile>(element)
             return WorktreeState(
                 data.names.filterValues { it.isNotBlank() },
                 data.worktreeOrder.filter { it.isNotBlank() },
                 data.sessionList.filterKeys { it.isNotBlank() },
+                data.created.filter { it.isNotBlank() },
+                data.hidden.filter { it.isNotBlank() },
             )
         }
         val names = json.decodeFromJsonElement(codec, element).filterValues { it.isNotBlank() }
@@ -2028,6 +2129,8 @@ internal fun writeWorktreeState(file: Path, state: WorktreeState) {
         names = state.names.filterValues { it.isNotBlank() },
         worktreeOrder = state.worktreeOrder.filter { it.isNotBlank() }.distinct(),
         sessionList = state.sessionList.filterKeys { it.isNotBlank() },
+        created = state.created.filter { it.isNotBlank() }.distinct(),
+        hidden = state.hidden.filter { it.isNotBlank() }.distinct(),
     )
     val tmp = Files.createTempFile(file.parent, ".worktree-names", ".tmp")
     try {
@@ -2062,13 +2165,24 @@ private fun prependWorktreeOrder(file: Path, path: String, paths: List<String>) 
     writeWorktreeState(file, state.copy(worktreeOrder = (listOf(path) + rest).distinct()))
 }
 
+private fun recordCreated(file: Path, path: String) {
+    try {
+        val state = readWorktreeState(file)
+        if (state.created.any { samePath(it, path) }) return
+        writeWorktreeState(file, state.copy(created = state.created + path, hidden = state.hidden.filter { !samePath(it, path) }))
+    } catch (e: Exception) {
+        KiloWorktreeRpcApiImpl.LOG.warn("worktree created record failed: file=$file path=$path message=${e.message}", e)
+    }
+}
+
 private fun removeWorktreeState(file: Path, path: String) {
     val state = readWorktreeState(file)
     val names = state.names.filterKeys { !samePath(it, path) }
     val order = state.worktreeOrder.filter { !samePath(it, path) }
     val visible = state.sessionList.filterKeys { !samePath(it, path) }
-    if (names == state.names && order == state.worktreeOrder && visible == state.sessionList) return
-    writeWorktreeState(file, state.copy(names = names, worktreeOrder = order, sessionList = visible))
+    val created = state.created.filter { !samePath(it, path) }
+    if (names == state.names && order == state.worktreeOrder && visible == state.sessionList && created == state.created) return
+    writeWorktreeState(file, state.copy(names = names, worktreeOrder = order, sessionList = visible, created = created))
 }
 
 private fun worktreePaths(items: List<WorktreeDto>): List<String> {

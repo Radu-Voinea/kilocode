@@ -101,6 +101,12 @@ interface KiloAppRpcApi : RemoteApi<Unit> {
      */
     suspend fun setIndexWorktrees(value: Boolean)
 
+    /** Where Agent Manager creates new worktrees; blank means `.kilo/worktrees` in the repository. */
+    suspend fun worktreeLocation(): String
+
+    /** Persist [worktreeLocation]. Existing worktrees stay where they are. */
+    suspend fun setWorktreeLocation(value: String)
+
     /** Read the backend diagnostic log file for download in split mode. Null when absent. */
     suspend fun backendLogFile(): LogFileDto?
 

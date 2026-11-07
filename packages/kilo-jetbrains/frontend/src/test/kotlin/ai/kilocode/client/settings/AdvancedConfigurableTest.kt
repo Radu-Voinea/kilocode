@@ -51,7 +51,7 @@ class AdvancedConfigurableTest : BasePlatformTestCase() {
         edt {
             val root = cfg.createComponent()
             assertEquals(2, combos(root as Container).size)
-            assertEquals(1, fields(root).size)
+            assertEquals(2, fields(root).size)
             assertFalse(cfg.isModified)
         }
     }
@@ -119,6 +119,27 @@ class AdvancedConfigurableTest : BasePlatformTestCase() {
             val labels = links(root as Container).map { it.text }
             assertTrue("expected a reveal-logs link, got $labels", labels.contains(AdvancedLogActions.revealLabel()))
         }
+    }
+
+    fun `test worktree location is fetched and saved when changed`() {
+        appRpc.worktreeLocation = ".worktrees"
+        val cfg = configurable()
+        val root = edt { cfg.createComponent() as Container }
+        ui.drain()
+        coroutines.drain()
+        ui.drain()
+
+        assertEquals(".worktrees", edt { location(root).text })
+        assertFalse(edt { cfg.isModified })
+
+        edt {
+            location(root).text = " ../{repo}-trees "
+            assertTrue(cfg.isModified)
+            cfg.apply()
+        }
+
+        assertTrue(coroutines.pumpUntil { appRpc.worktreeLocation == "../{repo}-trees" })
+        assertFalse(edt { cfg.isModified })
     }
 
     fun `test createComponent fetches and renders the index worktrees toggle`() {
@@ -222,7 +243,9 @@ class AdvancedConfigurableTest : BasePlatformTestCase() {
         it.itemCount > 0 && it.getItemAt(0) is LogConfig.ContentMode
     }
 
-    private fun field(root: Container): JBTextField = fields(root).single()
+    private fun field(root: Container): JBTextField = fields(root).first()
+
+    private fun location(root: Container): JBTextField = fields(root).last()
 
     private fun combos(root: Container): List<ComboBox<*>> = buildList {
         collect(root) { if (it is ComboBox<*>) add(it) }

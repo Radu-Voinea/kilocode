@@ -12,6 +12,7 @@ import ai.kilocode.backend.cli.KiloCliPlatform
 import ai.kilocode.backend.cli.KiloProps
 import ai.kilocode.backend.cli.KiloRepoCli
 import ai.kilocode.backend.workspace.KiloWorktreeIndexSettings
+import ai.kilocode.backend.workspace.KiloWorktreeLocationSettings
 import ai.kilocode.jetbrains.api.model.KiloProfile200Response
 import ai.kilocode.log.KiloLog
 import ai.kilocode.log.LogConfig
@@ -119,6 +120,22 @@ class KiloAppRpcApiImpl : KiloAppRpcApi {
     }
 
     override suspend fun indexWorktrees(): Boolean = KiloWorktreeIndexSettings.get()
+
+    override suspend fun worktreeLocation(): String = KiloWorktreeLocationSettings.get()
+
+    override suspend fun setWorktreeLocation(value: String) {
+        if (KiloWorktreeLocationSettings.get() == value.trim()) return
+        KiloWorktreeLocationSettings.set(value)
+        if (ApplicationManager.getApplication() == null) return
+        // The exclude policy follows the location, so open projects rescan their excluded roots.
+        for (project in ProjectManager.getInstance().openProjects) {
+            if (project.isDisposed) continue
+            writeAction {
+                ProjectRootManagerEx.getInstanceEx(project)
+                    .makeRootsChange({}, RootsChangeRescanningInfo.RESCAN_DEPENDENCIES_IF_NEEDED)
+            }
+        }
+    }
 
     override suspend fun setIndexWorktrees(value: Boolean) {
         if (KiloWorktreeIndexSettings.get() == value) return

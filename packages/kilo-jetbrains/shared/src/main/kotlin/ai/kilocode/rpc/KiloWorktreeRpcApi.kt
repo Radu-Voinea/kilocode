@@ -124,6 +124,18 @@ interface KiloWorktreeRpcApi : RemoteApi<Unit> {
     suspend fun reorder(directory: String, paths: List<String>): Boolean
 
     /**
+     * Shows the existing worktree at [path] in Agent Manager again (after [hide]). Fails with an error
+     * when [path] is not a worktree of the repository at [directory]. Never creates or moves anything.
+     */
+    suspend fun addExisting(directory: String, path: String): CreateWorktreeResultDto
+
+    /**
+     * Takes the worktree at [path] off the Agent Manager list without touching it on disk or in git.
+     * Returns true when the list changed.
+     */
+    suspend fun hide(directory: String, path: String): Boolean
+
+    /**
      * Returns the persisted session-list visibility for [directory], or null when the user has not
      * chosen a value yet.
      */
