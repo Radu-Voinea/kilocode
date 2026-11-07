@@ -12,6 +12,7 @@ import { Plans } from "./plan"
 import { CAPABILITY as REPORT, Reports } from "./reports"
 import { Steering } from "./steering"
 import type { Subagents } from "./subagents"
+import { CAPABILITY as TASKS, Tasks, backgrounded, backgroundedMeta } from "./tasks"
 import { Titles } from "./titles"
 
 type Connection = Pick<AgentSideConnection, "sessionUpdate">
@@ -28,6 +29,7 @@ export class Extensions {
   private readonly failures: Failures
   private readonly reports: Reports
   readonly steering = new Steering()
+  private readonly tasks: Tasks
   private capabilities: ClientCapabilities | undefined
   private readonly running = new Set<string>()
 
@@ -45,6 +47,7 @@ export class Extensions {
     this.compactions = new Compactions(input, () => isAir(this.capabilities))
     this.failures = new Failures(input, () => this.supports(FAILURE))
     this.reports = new Reports(input)
+    this.tasks = new Tasks(input, () => this.supports(TASKS))
   }
 
   setClientCapabilities(capabilities: ClientCapabilities | undefined) {
@@ -69,6 +72,7 @@ export class Extensions {
       ...(this.supports(FAILURE) ? [FAILURE] : []),
       ...(this.supports(DIFF) ? [DIFF] : []),
       ...(this.supports(REPORT) ? [REPORT] : []),
+      ...(this.supports(TASKS) ? [TASKS] : []),
     ]
     return capabilityMeta(names)
   }
@@ -83,15 +87,37 @@ export class Extensions {
       case "message.updated": {
         const info = event.properties.info
         if (info.role === "user") this.steering.message(info.sessionID)
-        if (info.role === "user") await this.modes.message(info)
+        // A subagent's agent and model are its own, not a switch of the session's mode.
+        if (info.role === "user" && !this.input.subagents.isChild(info.sessionID)) await this.modes.message(info)
         if (info.role === "assistant") await this.compactions.message(info.sessionID, info)
         return
       }
       case "message.part.updated": {
         const part = event.properties.part
         this.reports.part(part.sessionID, part)
+        if (part.type === "tool" && part.state.status === "completed") {
+          const state = await this.state(part.sessionID)
+          if (state) await this.tasks.tool(state.id, state.cwd, part)
+        }
         if (part.type !== "compaction" || !(await this.known(part.sessionID))) return
         await this.compactions.part(part.sessionID, part)
+        return
+      }
+      case "background_process.updated": {
+        const info = event.properties.info
+        // A hidden subagent's process shows in the session that answers for it.
+        const state =
+          (await this.state(info.sessionID)) ?? (await this.state(this.input.subagents.target(info.sessionID)))
+        await this.tasks.process(state?.id, state?.cwd ?? info.cwd, info)
+        return
+      }
+      case "background_process.deleted":
+        await this.tasks.processDeleted(event.properties.processID)
+        return
+      case "session.error": {
+        const id = event.properties.sessionID
+        if (!id || !event.properties.error) return
+        await this.tasks.agent(id, event.properties.error.name === "MessageAbortedError" ? "stopped" : "failed")
         return
       }
       case "session.compacted":
@@ -110,6 +136,7 @@ export class Extensions {
         if (status.type !== "idle") return
         this.failures.idle(id)
         await this.compactions.idle(id)
+        await this.tasks.agent(id, "completed")
         return
       }
       case "session.updated": {
@@ -135,8 +162,15 @@ export class Extensions {
 
   /** A finished tool call's update, with Air's own form of its content where the client reads it. */
   completed<T extends ToolCallUpdate>(part: ToolPart, update: T): T {
-    if (!this.supports(DIFF)) return update
-    return { ...update, content: patchContent(part, update.content ?? undefined) }
+    const content = this.supports(DIFF) ? { content: patchContent(part, update.content ?? undefined) } : {}
+    const meta =
+      this.supports(TASKS) && backgrounded(part) ? { _meta: backgroundedMeta(update._meta ?? undefined) } : {}
+    return { ...update, ...content, ...meta }
+  }
+
+  /** Stops a background task from the client. */
+  stopTask(sessionId: string, id: string) {
+    return this.tasks.stop(sessionId, id)
   }
 
   /** Whether a turn of the session is running. */
@@ -170,6 +204,11 @@ export class Extensions {
   }
 
   private async known(sessionId: string) {
-    return !!(await Effect.runPromise(this.input.session.tryGet(sessionId)))
+    return !!(await this.state(sessionId))
+  }
+
+  private async state(sessionId: string | undefined) {
+    if (!sessionId) return undefined
+    return await Effect.runPromise(this.input.session.tryGet(sessionId))
   }
 }

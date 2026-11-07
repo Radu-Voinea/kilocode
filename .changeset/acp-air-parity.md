@@ -12,3 +12,4 @@ ACP clients such as JetBrains Air now see:
 - Edits and new files as real diffs built from Kilo's own patch (JetBrains Air)
 - The files each turn changed, for reviewing a turn (JetBrains Air)
 - Steering a running turn with a follow-up message
+- Background processes and background subagents as stoppable tasks (JetBrains Air)

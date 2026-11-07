@@ -247,6 +247,30 @@ scenarios.steer = async () => {
   log.push(`== steering while idle -> ${short(idle.result ?? idle.error)}`)
 }
 
+// Background subagents need KILO_EXPERIMENTAL_BACKGROUND_SUBAGENTS=1.
+scenarios.async = async () => {
+  root = (await newSession()).sessionId
+  const spawned: string[] = []
+  const watch = setInterval(() => {
+    for (const line of log) {
+      const m = line.match(/async_task_spawned .*"asyncTaskId":"([^"]+)"/)
+      if (m && !spawned.includes(m[1])) spawned.push(m[1])
+    }
+  }, 200)
+  await prompt(
+    'Do exactly two things, then reply "started": 1) use the background_process tool with action start and command `sleep 30` (description "sleeper"); 2) use the task tool with background true, subagent_type "general", description "Echo check", asking the subagent to run `echo bg-ok` and report it. Do not wait for either.',
+  )
+  await Bun.sleep(2000)
+  const process = spawned.find((id) => id.startsWith("process:"))
+  log.push(`== spawned: ${spawned.join(", ")}`)
+  if (process) {
+    const res = await call("_session/async_task/stop", { sessionId: root, asyncTaskId: process })
+    log.push(`== stop ${process} -> ${short(res.result ?? res.error)}`)
+  }
+  await Bun.sleep(15000)
+  clearInterval(watch)
+}
+
 const run = scenarios[scenario]
 if (!run) {
   console.log(`unknown scenario ${scenario}; known: ${Object.keys(scenarios).join(", ")}`)

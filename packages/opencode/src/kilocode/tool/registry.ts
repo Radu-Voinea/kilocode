@@ -3,6 +3,7 @@ import { GoalReportTool, GoalTool } from "../session/goal/tool"
 import { AgentManagerModelsTool } from "./agent-manager-models"
 import { AgentManagerTool } from "./agent-manager"
 import { BackgroundProcessTool } from "./background-process"
+import { clientTasks } from "@/kilocode/acp/client"
 import { BoardReadTool, BoardPostTool } from "./board"
 import { BrowserOpenTool } from "./browser-open"
 import { CancelWakeupTool } from "./cancel-wakeup"
@@ -359,7 +360,10 @@ export namespace KiloToolRegistry {
       tools.save,
       tools.recall,
       ...(Flag.KILO_CLIENT === "vscode" ? [tools.chart] : []),
-      ...(Flag.KILO_CLIENT === "cli" || Flag.KILO_CLIENT === "vscode" ? [tools.process] : []),
+      // An ACP client sees background processes only as Air async tasks, which it can stop.
+      ...(Flag.KILO_CLIENT === "cli" || Flag.KILO_CLIENT === "vscode" || (Flag.KILO_CLIENT === "acp" && clientTasks())
+        ? [tools.process]
+        : []),
       ...((Flag.KILO_CLIENT === "cli" || Flag.KILO_CLIENT === "vscode") && tools.schedule ? [tools.schedule] : []),
       ...((Flag.KILO_CLIENT === "cli" || Flag.KILO_CLIENT === "vscode") && tools.cancel ? [tools.cancel] : []),
       ...((Flag.KILO_CLIENT === "cli" || Flag.KILO_CLIENT === "vscode") && tools.cronCreate ? [tools.cronCreate] : []),

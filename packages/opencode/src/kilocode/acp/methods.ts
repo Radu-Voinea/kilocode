@@ -4,6 +4,7 @@ import { Effect } from "effect"
 import { promptContentToParts } from "@/acp/content"
 import type { ACPSession } from "@/acp/session"
 import type { Extensions } from "./extensions"
+import { STOP } from "./tasks"
 
 type Params = Record<string, unknown>
 
@@ -26,6 +27,7 @@ export function steeringMeta() {
 /** Kilo's ACP extension methods; an unknown one is `methodNotFound`. */
 export async function handle(method: string, params: Params, ctx: Context): Promise<Params> {
   if (method === STEER) return await steer(params, ctx)
+  if (method === STOP) return await stop(params, ctx)
   throw RequestError.methodNotFound(method)
 }
 
@@ -67,4 +69,13 @@ async function steer(params: Params, ctx: Context): Promise<Params> {
   )
   ctx.extensions?.steering.steered(sessionId)
   return { outcome: "injected" }
+}
+
+/** Stops one background task without cancelling the turn, as Air's `_session/async_task/stop`. */
+async function stop(params: Params, ctx: Context): Promise<Params> {
+  const sessionId = typeof params.sessionId === "string" ? params.sessionId.trim() : ""
+  const id = typeof params.asyncTaskId === "string" ? params.asyncTaskId.trim() : ""
+  if (!sessionId) throw RequestError.invalidParams(undefined, "async task stop params require a non-empty sessionId")
+  if (!id) throw RequestError.invalidParams(undefined, "async task stop params require a non-empty asyncTaskId")
+  return (await ctx.extensions?.stopTask(sessionId, id)) ?? { stopped: false }
 }
