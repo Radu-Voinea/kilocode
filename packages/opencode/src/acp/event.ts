@@ -25,8 +25,12 @@ import {
   completedToolUpdate,
 } from "./tool"
 
+// kilocode_change start
 type Connection = Pick<AgentSideConnection, "sessionUpdate"> &
-  Partial<Pick<AgentSideConnection, "requestPermission" | "writeTextFile" | "unstable_createElicitation">> // kilocode_change
+  Partial<
+    Pick<AgentSideConnection, "requestPermission" | "writeTextFile" | "unstable_createElicitation" | "extNotification">
+  >
+// kilocode_change end
 type GlobalEventEnvelope = {
   payload?: Event
 }

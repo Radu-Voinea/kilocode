@@ -4,6 +4,7 @@ import { Effect } from "effect"
 import { promptContentToParts } from "@/acp/content"
 import type { ACPSession } from "@/acp/session"
 import type { Extensions } from "./extensions"
+import { METHODS } from "./sessions"
 import { STOP } from "./tasks"
 
 type Params = Record<string, unknown>
@@ -28,6 +29,10 @@ export function steeringMeta() {
 export async function handle(method: string, params: Params, ctx: Context): Promise<Params> {
   if (method === STEER) return await steer(params, ctx)
   if (method === STOP) return await stop(params, ctx)
+  if (METHODS.includes(method)) {
+    const result = await ctx.extensions?.indexMethod(method, params)
+    if (result) return result
+  }
   throw RequestError.methodNotFound(method)
 }
 

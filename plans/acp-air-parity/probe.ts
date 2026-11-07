@@ -271,6 +271,27 @@ scenarios.async = async () => {
   clearInterval(watch)
 }
 
+scenarios.index = async () => {
+  root = (await newSession()).sessionId
+  await prompt("Reply with exactly: hello")
+  const sub = await call("_session/list/subscribe", { cwd })
+  log.push(`== subscribe -> ${short(sub.result ?? sub.error)}`)
+  const row = async (archived = "all") => {
+    const list = await call("session/list", { cwd, _meta: { jetbrains: { air: { list: { archived } } } } })
+    return list.result?.sessions?.find((s: any) => s.sessionId === root)
+  }
+  log.push(`== row: ${short(await row())}`)
+  log.push(`== rename -> ${short((await call("_session/rename", { sessionId: root, title: "Probe renamed" })).result)}`)
+  await Bun.sleep(500)
+  log.push(`== archive -> ${short((await call("_session/archive", { sessionId: root })).result)}`)
+  await Bun.sleep(500)
+  log.push(`== in default list: ${!!(await row("unarchived"))}; archived row: ${short(await row("archived"))}`)
+  log.push(`== unarchive -> ${short((await call("_session/unarchive", { sessionId: root })).result)}`)
+  await Bun.sleep(500)
+  log.push(`== row after unarchive: ${short(await row("unarchived"))}`)
+  await call("_session/list/unsubscribe", { subscriptionId: sub.result?.subscriptionId })
+}
+
 const run = scenarios[scenario]
 if (!run) {
   console.log(`unknown scenario ${scenario}; known: ${Object.keys(scenarios).join(", ")}`)

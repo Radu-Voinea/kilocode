@@ -1,4 +1,9 @@
-import type { AgentSideConnection, ClientCapabilities, ToolCallUpdate } from "@agentclientprotocol/sdk"
+import type {
+  AgentSideConnection,
+  ClientCapabilities,
+  ListSessionsRequest,
+  ToolCallUpdate,
+} from "@agentclientprotocol/sdk"
 import type { AssistantMessage, Event, KiloClient, SessionMessageResponse, ToolPart } from "@kilocode/sdk/v2"
 import { Effect } from "effect"
 import type { ACPSession } from "@/acp/session"
@@ -10,12 +15,13 @@ import { setClient } from "./client"
 import { Modes, type ConfigOptions } from "./modes"
 import { Plans } from "./plan"
 import { CAPABILITY as REPORT, Reports } from "./reports"
+import { CAPABILITIES as INDEX, CAPABILITY as SESSION_INDEX, SessionIndex } from "./sessions"
 import { Steering } from "./steering"
 import type { Subagents } from "./subagents"
 import { CAPABILITY as TASKS, Tasks, backgrounded, backgroundedMeta } from "./tasks"
 import { Titles } from "./titles"
 
-type Connection = Pick<AgentSideConnection, "sessionUpdate">
+type Connection = Pick<AgentSideConnection, "sessionUpdate"> & Partial<Pick<AgentSideConnection, "extNotification">>
 
 /**
  * Kilo's ACP additions that react to server events: one entry point for the shared event
@@ -30,6 +36,7 @@ export class Extensions {
   private readonly reports: Reports
   readonly steering = new Steering()
   private readonly tasks: Tasks
+  private readonly index: SessionIndex
   private capabilities: ClientCapabilities | undefined
   private readonly running = new Set<string>()
 
@@ -39,6 +46,8 @@ export class Extensions {
       connection: Connection
       session: ACPSession.Interface
       subagents: Subagents
+      /** Clears a session's archive time; Kilo's own by default. */
+      unarchive?: (sessionId: string, directory: string) => Promise<void>
     },
   ) {
     this.plans = new Plans(input)
@@ -48,6 +57,7 @@ export class Extensions {
     this.failures = new Failures(input, () => this.supports(FAILURE))
     this.reports = new Reports(input)
     this.tasks = new Tasks(input, () => this.supports(TASKS))
+    this.index = new SessionIndex({ ...input, running: (id) => this.running.has(id) })
   }
 
   setClientCapabilities(capabilities: ClientCapabilities | undefined) {
@@ -73,6 +83,7 @@ export class Extensions {
       ...(this.supports(DIFF) ? [DIFF] : []),
       ...(this.supports(REPORT) ? [REPORT] : []),
       ...(this.supports(TASKS) ? [TASKS] : []),
+      ...(this.indexed ? INDEX : []),
     ]
     return capabilityMeta(names)
   }
@@ -126,8 +137,10 @@ export class Extensions {
       case "session.status": {
         const id = event.properties.sessionID
         const status = event.properties.status
+        const was = this.running.has(id)
         if (status.type === "idle") this.running.delete(id)
         if (status.type !== "idle") this.running.add(id)
+        if (was !== this.running.has(id)) this.index.status(id)
         if (status.type === "idle") this.steering.idle(id)
         if (status.type === "busy") this.steering.busy(id)
         if (status.type === "busy") this.failures.busy(id)
@@ -139,8 +152,15 @@ export class Extensions {
         await this.tasks.agent(id, "completed")
         return
       }
+      case "session.created":
+        this.index.updated(event.properties.info)
+        return
+      case "session.deleted":
+        this.index.deleted(event.properties.info)
+        return
       case "session.updated": {
         const info = event.properties.info
+        this.index.updated(info)
         // A subagent's name comes from `subagent_spawned`, not from its title.
         if (info.parentID || this.input.subagents.isChild(info.id)) return
         if (!(await this.known(info.id))) return
@@ -166,6 +186,23 @@ export class Extensions {
     const meta =
       this.supports(TASKS) && backgrounded(part) ? { _meta: backgroundedMeta(update._meta ?? undefined) } : {}
     return { ...update, ...content, ...meta }
+  }
+
+  /** Whether the client keeps Air's session index. */
+  get indexed() {
+    return isAir(this.capabilities) && this.supports(SESSION_INDEX)
+  }
+
+  /** `session/list` for a session index client, or undefined to list as before. */
+  async list(params: ListSessionsRequest) {
+    if (!this.indexed) return undefined
+    return await this.index.list(params)
+  }
+
+  /** A session index method: rename, archive, unarchive and the list subscription. */
+  async indexMethod(method: string, params: Record<string, unknown>) {
+    if (!this.indexed) return undefined
+    return await this.index.handle(method, params)
   }
 
   /** Stops a background task from the client. */

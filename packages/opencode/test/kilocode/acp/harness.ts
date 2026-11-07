@@ -14,18 +14,37 @@ export function air(...names: string[]): ClientCapabilities {
 }
 
 /** Kilo's ACP extensions over a recording connection and a fake SDK made of `sdk`. */
-export function harness(opts: { sdk?: object; capabilities?: ClientCapabilities } = {}) {
+export function harness(
+  opts: {
+    sdk?: object
+    capabilities?: ClientCapabilities
+    unarchive?: (sessionId: string, directory: string) => Promise<void>
+  } = {},
+) {
   const updates: Update[] = []
+  const notes: Array<[string, Record<string, unknown>]> = []
   const session = ManagedRuntime.make(LayerNode.compile(ACPSession.node)).runSync(
     ACPSession.Service.use((service) => Effect.succeed(service)),
   )
-  const connection = { sessionUpdate: (params: Update) => (updates.push(params), Promise.resolve()) }
+  const connection = {
+    sessionUpdate: (params: Update) => (updates.push(params), Promise.resolve()),
+    extNotification: (method: string, params: Record<string, unknown>) => (
+      notes.push([method, params]),
+      Promise.resolve()
+    ),
+  }
   const subagents = new Subagents({ connection, session })
-  const kilo = new Extensions({ sdk: (opts.sdk ?? {}) as KiloClient, connection, session, subagents })
+  const kilo = new Extensions({
+    sdk: (opts.sdk ?? {}) as KiloClient,
+    connection,
+    session,
+    subagents,
+    unarchive: opts.unarchive,
+  })
   subagents.setClientCapabilities(opts.capabilities)
   kilo.setClientCapabilities(opts.capabilities)
   const open = (id: string, cwd = "/work") => Effect.runPromise(session.create({ id, cwd }))
-  return { kilo, session, subagents, updates, open }
+  return { kilo, session, subagents, updates, notes, open }
 }
 
 export function event<T extends Event["type"]>(type: T, properties: Extract<Event, { type: T }>["properties"]) {

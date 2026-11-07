@@ -51,8 +51,12 @@ import * as KiloMethods from "@/kilocode/acp/methods" // kilocode_change
 export const AuthMethodID = "kilo-login" // kilocode_change
 
 export type Error = ACPError.Error
+// kilocode_change start
 type ServiceConnection = Pick<AgentSideConnection, "sessionUpdate"> &
-  Partial<Pick<AgentSideConnection, "requestPermission" | "writeTextFile" | "unstable_createElicitation">> // kilocode_change
+  Partial<
+    Pick<AgentSideConnection, "requestPermission" | "writeTextFile" | "unstable_createElicitation" | "extNotification">
+  >
+// kilocode_change end
 
 export type Interface = {
   readonly initialize: (input: InitializeRequest) => Effect.Effect<InitializeResponse, Error>
@@ -300,6 +304,10 @@ export function make(input: {
   })
 
   const listSessions = Effect.fn("ACP.listSessions")(function* (params: ListSessionsRequest) {
+    // kilocode_change start - Air's session index lists with its own rows and filters
+    const indexed = yield* Effect.promise(() => events?.extensions.list(params) ?? Promise.resolve(undefined))
+    if (indexed) return indexed
+    // kilocode_change end
     const cursor = params.cursor ? Number(params.cursor) : undefined
     const limit = 100
     const sessions = yield* request(
