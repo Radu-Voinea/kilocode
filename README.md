@@ -1,3 +1,17 @@
+# Fork builds (Radu-Voinea/kilocode)
+
+This fork builds Kilo from `main` on every push and publishes it as a [GitHub release](https://github.com/Radu-Voinea/kilocode/releases) with a four-part version: the upstream version plus a build number (`7.8.27.1`, `7.8.27.2`, ...). Builds are Linux x64 only.
+
+Install or update the CLI to the latest fork build (replaces `~/.kilo/bin`, keeps the previous install in `~/.kilo/bin.bak`):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Radu-Voinea/kilocode/main/script/fork-install.sh | bash
+```
+
+To install a specific build, pass its tag: `... | bash -s v7.8.27.1`.
+
+The JetBrains plugin with the same CLI bundled is [kilo-code-jetbrains.zip](https://github.com/Radu-Voinea/kilocode/releases/latest/download/kilo-code-jetbrains.zip). Install it with **Settings → Plugins → ⚙ → Install Plugin from Disk…**.
+
 # Important: `main` is not accepting new features
 
 All new feature pull requests must target the `v2` branch. Bug fixes for the current release may still go to `main`.

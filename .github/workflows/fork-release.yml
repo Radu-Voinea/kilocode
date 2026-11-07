@@ -1,10 +1,12 @@
-# Fork-only release: builds the Linux x64 CLI and the JetBrains plugin with that CLI bundled,
+# Fork-only release, on every push to main or by hand: builds the Linux x64 CLI and the JetBrains plugin with that CLI bundled,
 # versioned as the upstream release plus a fourth number (7.8.27 -> 7.8.27.1, 7.8.27.2, ...),
 # and attaches both to a GitHub Release on this repository. Publishes nothing to npm or the
 # JetBrains Marketplace.
 name: fork-release
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       version:
@@ -89,10 +91,12 @@ jobs:
         run: |
           version="${{ steps.version.outputs.version }}"
           mkdir -p out
+          find packages/opencode/dist -name '*.map' -delete
           tar -czf "out/kilo-linux-x64.tar.gz" -C packages/opencode/dist/@kilocode/cli-linux-x64/bin .
           mapfile -t zips < <(compgen -G "packages/kilo-jetbrains/build/distributions/*.zip")
           [ "${#zips[@]}" -eq 1 ] || { echo "::error::Expected one plugin zip, found ${#zips[@]}"; exit 1; }
-          cp "${zips[0]}" "out/kilo-code-jetbrains-$version.zip"
+          # A fixed name keeps releases/latest/download/kilo-code-jetbrains.zip working.
+          cp "${zips[0]}" "out/kilo-code-jetbrains.zip"
           (cd out && sha256sum * > SHA256SUMS)
           ls -la out
 
