@@ -197,6 +197,14 @@ scenarios.failure = async () => {
   log.push(`== response: ${short(res.result ?? res.error, 800)}`)
 }
 
+scenarios.diff = async () => {
+  await Bun.write(`${cwd}/notes.txt`, "alpha\nbeta\ngamma\n")
+  root = (await newSession()).sessionId
+  await prompt(
+    "In notes.txt replace the line beta with BETA using the edit tool, then create new.txt containing the single line hello using the write tool. Do nothing else.",
+  )
+}
+
 const run = scenarios[scenario]
 if (!run) {
   console.log(`unknown scenario ${scenario}; known: ${Object.keys(scenarios).join(", ")}`)

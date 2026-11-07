@@ -1,9 +1,10 @@
-import type { AgentSideConnection, ClientCapabilities } from "@agentclientprotocol/sdk"
-import type { AssistantMessage, Event, KiloClient, SessionMessageResponse } from "@kilocode/sdk/v2"
+import type { AgentSideConnection, ClientCapabilities, ToolCallUpdate } from "@agentclientprotocol/sdk"
+import type { AssistantMessage, Event, KiloClient, SessionMessageResponse, ToolPart } from "@kilocode/sdk/v2"
 import { Effect } from "effect"
 import type { ACPSession } from "@/acp/session"
 import { capabilityMeta, isAir, supports } from "./air"
 import { Compactions } from "./compaction"
+import { CAPABILITY as DIFF, patchContent } from "./diff"
 import { CAPABILITY as FAILURE, Failures } from "./failures"
 import { setClient } from "./client"
 import { Modes, type ConfigOptions } from "./modes"
@@ -60,6 +61,7 @@ export class Extensions {
     const names = [
       ...(this.input.subagents.enabled ? ["nativeSubagentSessions"] : []),
       ...(this.supports(FAILURE) ? [FAILURE] : []),
+      ...(this.supports(DIFF) ? [DIFF] : []),
     ]
     return capabilityMeta(names)
   }
@@ -116,6 +118,12 @@ export class Extensions {
     if (!this.compactions.owns(messageId)) return false
     if (type === "text" && field === "text") this.compactions.delta(sessionId, messageId, text)
     return true
+  }
+
+  /** A finished tool call's update, with Air's own form of its content where the client reads it. */
+  completed<T extends ToolCallUpdate>(part: ToolPart, update: T): T {
+    if (!this.supports(DIFF)) return update
+    return { ...update, content: patchContent(part, update.content ?? undefined) }
   }
 
   /** The `_meta` that ends a failed turn as an Air session failure, or undefined to fail it as before. */

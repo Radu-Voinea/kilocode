@@ -405,12 +405,17 @@ export class Subscription {
           sessionId,
           update: {
             sessionUpdate: "tool_call_update",
-            ...completedToolUpdate({
-              toolCallId: part.callID,
-              toolName: part.tool,
-              state: part.state,
-              cwd,
-            }),
+            // kilocode_change start - Air reads edits as git patches
+            ...this.kilo.completed(
+              part,
+              completedToolUpdate({
+                toolCallId: part.callID,
+                toolName: part.tool,
+                state: part.state,
+                cwd,
+              }),
+            ),
+            // kilocode_change end
           },
         })
         return
