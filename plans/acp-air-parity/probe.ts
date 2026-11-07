@@ -40,6 +40,8 @@ const call = (method: string, params: object) =>
   })
 
 let root = ""
+// How the scenario answers a form elicitation; unset cancels it.
+let answer: ((params: any) => Record<string, unknown>) | undefined
 const log: string[] = []
 const tag = (sessionId: string) => (!sessionId ? "-" : sessionId === root ? "root" : `ses:${sessionId.slice(-6)}`)
 const short = (value: unknown, max = 300) => {
@@ -48,14 +50,22 @@ const short = (value: unknown, max = 300) => {
 }
 ;(async () => {
   let buf = ""
+  const decoder = new TextDecoder()
   for await (const chunk of proc.stdout) {
-    buf += new TextDecoder().decode(chunk)
+    buf += decoder.decode(chunk, { stream: true })
     let i
     while ((i = buf.indexOf("\n")) >= 0) {
       const line = buf.slice(0, i)
       buf = buf.slice(i + 1)
       if (!line.trim()) continue
-      const msg = JSON.parse(line)
+      const msg = (() => {
+        try {
+          return JSON.parse(line)
+        } catch {
+          log.push(`!! non-JSON stdout: ${line.slice(0, 300)}`)
+        }
+      })()
+      if (!msg) continue
       if (msg.id !== undefined && waiting.has(msg.id) && !msg.method) {
         waiting.get(msg.id)!(msg)
         waiting.delete(msg.id)
@@ -87,6 +97,12 @@ const short = (value: unknown, max = 300) => {
       }
       if (msg.method === "fs/write_text_file") {
         send({ id: msg.id, result: {} })
+        continue
+      }
+      if (msg.method === "elicitation/create" && answer) {
+        const content = answer(msg.params)
+        log.push(`${tag(msg.params.sessionId)} elicitation "${msg.params.message}" -> ${short(content)}`)
+        send({ id: msg.id, result: { action: "accept", content } })
         continue
       }
       if (msg.id !== undefined && msg.method) {
@@ -142,6 +158,27 @@ scenarios.title = async () => {
   await Bun.sleep(8000)
   const list = await call("session/list", { cwd })
   log.push(`== list: ${short(list.result?.sessions?.find((s: any) => s.sessionId === root))}`)
+}
+
+scenarios.mode = async () => {
+  const created = await newSession()
+  root = created.sessionId
+  const modes = created.configOptions.find((o: any) => o.id === "mode")
+  log.push(`== modes: ${modes.options.map((o: any) => o.value).join(",")} current=${modes.currentValue}`)
+  await call("session/set_config_option", { sessionId: root, configId: "mode", value: "plan" })
+  // Accept the first option of each question: the plan follow-up's first answer implements the plan.
+  answer = (params) =>
+    Object.fromEntries(
+      Object.entries(params.requestedSchema.properties)
+        .filter(([, field]: [string, any]) => field.oneOf)
+        .map(([key, field]: [string, any]) => {
+          log.push(`   options: ${field.oneOf.map((o: any) => o.const).join(" | ")}`)
+          return [key, field.oneOf[0].const]
+        }),
+    )
+  await prompt(
+    "Plan a one-line change: create a file hello.txt containing the word hi. Keep the plan to two short lines, write it, and call plan_exit right away without asking me anything.",
+  )
 }
 
 const run = scenarios[scenario]

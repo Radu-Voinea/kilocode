@@ -165,6 +165,22 @@ export function make(input: {
     return loaded
   })
 
+  // kilocode_change start - Kilo can switch the agent or model itself, then tells the client
+  events?.extensions.setConfigOptions((state) =>
+    Effect.runPromise(
+      configSnapshot(state).pipe(
+        Effect.map((snapshot) =>
+          configOptions(snapshot, {
+            model: state.model ?? selectDefaultModel(snapshot),
+            variant: state.variant,
+            modeId: state.modeId,
+          }),
+        ),
+      ),
+    ),
+  )
+  // kilocode_change end
+
   const newSession = Effect.fn("ACP.newSession")(function* (params: NewSessionRequest) {
     const started = performance.now()
     const snapshot = yield* directorySnapshot(params.cwd)

@@ -3,6 +3,8 @@ import type { Event, KiloClient } from "@kilocode/sdk/v2"
 import { Effect } from "effect"
 import type { ACPSession } from "@/acp/session"
 import { capabilityMeta, supports } from "./air"
+import { setClient } from "./client"
+import { Modes, type ConfigOptions } from "./modes"
 import { Plans } from "./plan"
 import type { Subagents } from "./subagents"
 import { Titles } from "./titles"
@@ -16,6 +18,7 @@ type Connection = Pick<AgentSideConnection, "sessionUpdate">
 export class Extensions {
   private readonly plans: Plans
   private readonly titles: Titles
+  private readonly modes: Modes
   private capabilities: ClientCapabilities | undefined
 
   constructor(
@@ -28,10 +31,17 @@ export class Extensions {
   ) {
     this.plans = new Plans(input)
     this.titles = new Titles(input)
+    this.modes = new Modes(input)
   }
 
   setClientCapabilities(capabilities: ClientCapabilities | undefined) {
     this.capabilities = capabilities
+    setClient(capabilities)
+  }
+
+  /** How to build a session's config options, which only the ACP service knows. */
+  setConfigOptions(options: ConfigOptions) {
+    this.modes.setConfigOptions(options)
   }
 
   /** Whether the client advertised the Air capability `name`. */
@@ -50,6 +60,11 @@ export class Extensions {
       case "todo.updated": {
         if (!(await this.known(event.properties.sessionID))) return
         await this.plans.update(event.properties.sessionID, event.properties.todos)
+        return
+      }
+      case "message.updated": {
+        const info = event.properties.info
+        if (info.role === "user") await this.modes.message(info)
         return
       }
       case "session.updated": {

@@ -37,9 +37,9 @@ export const PlanFollowupRuntime = {
     const { AppRuntime } = await import("@/effect/app-runtime")
     return AppRuntime.runPromise(
       Provider.Service.use((svc) =>
-        svc.getModel(providerID, modelID).pipe(
-          Effect.catchIf(Provider.ModelNotFoundError.isInstance, () => Effect.succeed(undefined)),
-        ),
+        svc
+          .getModel(providerID, modelID)
+          .pipe(Effect.catchIf(Provider.ModelNotFoundError.isInstance, () => Effect.succeed(undefined))),
       ),
     )
   },
@@ -205,10 +205,7 @@ export namespace PlanFollowup {
     }
   }
 
-  async function pick(
-    ref: { providerID: string; modelID: string } | undefined,
-    variant?: string,
-  ) {
+  async function pick(ref: { providerID: string; modelID: string } | undefined, variant?: string) {
     if (!ref) return
     return stamp(ref, variant)
   }
@@ -318,14 +315,19 @@ export namespace PlanFollowup {
           // main prompt input below the dock already routes typed text as a question
           // reply, so "Type your own answer" would be redundant (originally hidden in
           // 65566af7f8, flipped back during the v1.4.4 upstream merge).
-          custom: Flag.KILO_CLIENT === "cli" || Flag.KILO_CLIENT === "jetbrains",
+          custom: Flag.KILO_CLIENT === "cli" || Flag.KILO_CLIENT === "jetbrains" || Flag.KILO_CLIENT === "acp",
           options: [
-            {
-              label: ANSWER_NEW_SESSION,
-              labelKey: "plan.followup.answer.newSession",
-              description: "Implement in a fresh session with a clean context",
-              descriptionKey: "plan.followup.answer.newSession.description",
-            },
+            // An ACP client can't open a session the agent started on its own.
+            ...(Flag.KILO_CLIENT === "acp"
+              ? []
+              : [
+                  {
+                    label: ANSWER_NEW_SESSION,
+                    labelKey: "plan.followup.answer.newSession",
+                    description: "Implement in a fresh session with a clean context",
+                    descriptionKey: "plan.followup.answer.newSession.description",
+                  },
+                ]),
             {
               label: ANSWER_CONTINUE,
               labelKey: "plan.followup.answer.continue",

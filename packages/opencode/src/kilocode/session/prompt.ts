@@ -1,6 +1,8 @@
 import path from "path"
 import fs from "fs/promises"
 import { Cause, Effect, Exit, Fiber, Scope } from "effect"
+import { Observability } from "@opencode-ai/core/observability"
+import { clientForms } from "@/kilocode/acp/client"
 import { SessionID, PartID, type MessageID } from "@/session/schema"
 import { MessageV2 } from "@/session/message-v2"
 import { Session } from "@/session/session"
@@ -109,6 +111,7 @@ export namespace KiloSessionPrompt {
   }
 
   function supportsPlanFollowup() {
+    if (Flag.KILO_CLIENT === "acp") return clientForms() // the follow-up is a form elicitation
     return ["cli", "vscode", "jetbrains"].includes(Flag.KILO_CLIENT)
   }
 
@@ -140,8 +143,9 @@ export namespace KiloSessionPrompt {
   }): Promise<"continue" | "break"> {
     if (!shouldAskPlanFollowup({ messages: input.messages, abort: input.abort })) return "break"
     const ctx = Instance.current
+    // The app's loggers, not Effect's default console logger: in `kilo acp` stdout is the protocol.
     const run = <A, E>(effect: Effect.Effect<A, E>) =>
-      Effect.runPromise(effect.pipe(Effect.provideService(InstanceRef, ctx)))
+      Effect.runPromise(effect.pipe(Effect.provideService(InstanceRef, ctx), Effect.provide(Observability.layer)))
     const ask = Instance.bind(PlanFollowup.ask)
     const action = await ask({
       sessionID: input.sessionID,
