@@ -303,6 +303,9 @@ class KiloSessionService internal constructor(
     suspend fun enhancePrompt(dir: String, text: String): String =
         call { enhancePrompt(dir, text) }
 
+    suspend fun generateCommitMessage(dir: String, files: List<String>, previous: String?): String =
+        call { generateCommitMessage(dir, files, previous) }
+
     /** Send a prompt to a session. */
     suspend fun prompt(id: String, dir: String, dto: PromptDto) {
         val meta = if (log.isDebugEnabled) {

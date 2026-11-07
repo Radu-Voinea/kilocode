@@ -184,6 +184,11 @@ class KiloSessionRpcApiImpl internal constructor(
         return ready { chat.enhancePrompt(directory, text) }
     }
 
+    override suspend fun generateCommitMessage(directory: String, files: List<String>, previous: String?): String {
+        requireLocalDir(directory, "generateCommitMessage")
+        return ready { chat.generateCommitMessage(directory, files, previous) }
+    }
+
     override suspend fun prompt(id: String, directory: String, prompt: PromptDto) {
         app.requireReady()
         log.info("prompt RPC: session=$id, dir=$directory, parts=${prompt.parts.size}")

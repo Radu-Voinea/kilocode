@@ -285,6 +285,17 @@ class FakeSessionRpcApi : KiloSessionRpcApi {
         return enhanced
     }
 
+    val commitMessages = java.util.concurrent.CopyOnWriteArrayList<Triple<String, List<String>, String?>>()
+    var commitMessage = "feat: generated"
+    var commitMessageThrows: Throwable? = null
+
+    override suspend fun generateCommitMessage(directory: String, files: List<String>, previous: String?): String {
+        assertNotEdt("generateCommitMessage")
+        commitMessages.add(Triple(directory, files, previous))
+        commitMessageThrows?.let { throw it }
+        return commitMessage
+    }
+
     override suspend fun prompt(id: String, directory: String, prompt: PromptDto) {
         assertNotEdt("prompt")
         promptThrows?.let { throw it }

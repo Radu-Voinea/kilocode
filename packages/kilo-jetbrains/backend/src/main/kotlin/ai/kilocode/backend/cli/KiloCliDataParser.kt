@@ -977,6 +977,21 @@ object KiloCliDataParser {
     fun buildEnhancePromptJson(text: String): String =
         """{"text":${escape(text)}}"""
 
+    /** Body for `POST /commit-message`: the repo path, an optional file subset, and the message to replace. */
+    fun buildCommitMessageJson(path: String, files: List<String>, previous: String?): String = buildString {
+        append("{\"path\":").append(escape(path))
+        if (files.isNotEmpty()) append(",\"selectedFiles\":[").append(files.joinToString(",") { escape(it) }).append(']')
+        previous?.takeIf { it.isNotBlank() }?.let { append(",\"previousMessage\":").append(escape(it)) }
+        append('}')
+    }
+
+    fun parseCommitMessage(raw: String): String =
+        tryParseObject(raw)?.str("message")?.trim()?.takeIf { it.isNotEmpty() }
+            ?: throw IllegalArgumentException("Commit message response is missing message")
+
+    /** The `message` of a CLI error body, when it has one. */
+    fun parseErrorMessage(raw: String): String? = tryParseObject(raw)?.str("message")?.takeIf { it.isNotBlank() }
+
     /**
      * Build the JSON body for `POST /session/{id}/prompt_async`.
      */

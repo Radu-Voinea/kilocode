@@ -189,6 +189,28 @@ class KiloBackendChatManager(
         }
     }
 
+    suspend fun generateCommitMessage(dir: String, files: List<String>, previous: String?): String {
+        val http = requireClient()
+        val url = requireBase()
+        val body = KiloCliDataParser.buildCommitMessageJson(dir, files, previous)
+        val request = Request.Builder()
+            .url("$url/commit-message?directory=${encode(dir)}")
+            .post(body.toRequestBody(JSON_TYPE))
+            .build()
+        val call = http.newCall(request)
+        call.timeout().timeout(ENHANCE_TIMEOUT_MINUTES, TimeUnit.MINUTES)
+        return call.await().use { response ->
+            val raw = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                log.warn("commit message failed: HTTP ${response.code}")
+                // 422 carries the generator's own reason ("No changes found ..."), worth showing as is.
+                val reason = if (response.code == 422) KiloCliDataParser.parseErrorMessage(raw) else null
+                throw RuntimeException(reason ?: "Commit message failed: HTTP ${response.code}")
+            }
+            KiloCliDataParser.parseCommitMessage(raw)
+        }
+    }
+
     fun prompt(id: String, dir: String, prompt: PromptDto) {
         val meta = if (log.isDebugEnabled) {
             "${ChatLogSummary.dir(dir)} ${ChatLogSummary.prompt(prompt)}"

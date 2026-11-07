@@ -105,6 +105,13 @@ interface KiloSessionRpcApi : RemoteApi<Unit> {
     /** Rewrite a draft prompt using the configured small model. */
     suspend fun enhancePrompt(directory: String, text: String): String
 
+    /**
+     * Write a commit message for the git changes in [directory] (only [files] when not empty) with
+     * the CLI's commit message generator. [previous] asks for a different message than that one.
+     * Throws with the CLI's reason, e.g. when there is nothing to commit.
+     */
+    suspend fun generateCommitMessage(directory: String, files: List<String>, previous: String?): String
+
     /** Send a prompt to a session (fire-and-forget). */
     suspend fun prompt(id: String, directory: String, prompt: PromptDto)
 

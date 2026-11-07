@@ -194,6 +194,39 @@ class KiloBackendChatManagerTest {
     }
 
     @Test
+    fun `commit message posts the repo, files and previous message`() = runBlocking {
+        val port = mock.start()
+        val chat = KiloBackendChatManager(scope, TestLog())
+        chat.start(OkHttpClient(), port, MutableSharedFlow())
+
+        val result = chat.generateCommitMessage("/repo", listOf("src/a.kt", "b \"q\".md"), "fix: old")
+
+        assertEquals("feat: add things", result)
+        assertTrue(mock.lastCommitMessagePath!!.startsWith("/commit-message?directory="))
+        assertEquals("""{"path":"/repo","selectedFiles":["src/a.kt","b \"q\".md"],"previousMessage":"fix: old"}""", mock.lastCommitMessageBody)
+
+        chat.generateCommitMessage("/repo", emptyList(), null)
+        assertEquals("""{"path":"/repo"}""", mock.lastCommitMessageBody)
+    }
+
+    @Test
+    fun `commit message shows the generator's reason but hides other failures`() = runBlocking {
+        val port = mock.start()
+        val chat = KiloBackendChatManager(scope, TestLog())
+        chat.start(OkHttpClient(), port, MutableSharedFlow())
+        mock.commitMessageStatus = 422
+        mock.commitMessage = """{"_tag":"CommitMessageNoChangesError","message":"No changes found to generate a commit message for"}"""
+
+        val none = assertFailsWith<RuntimeException> { chat.generateCommitMessage("/repo", emptyList(), null) }
+        assertEquals("No changes found to generate a commit message for", none.message)
+
+        mock.commitMessageStatus = 500
+        mock.commitMessage = """{"message":"provider secret detail"}"""
+        val failed = assertFailsWith<RuntimeException> { chat.generateCommitMessage("/repo", emptyList(), null) }
+        assertEquals("Commit message failed: HTTP 500", failed.message)
+    }
+
+    @Test
     fun `enhance prompt hides provider response details`() = runBlocking {
         val port = mock.start()
         val chat = KiloBackendChatManager(scope, TestLog())

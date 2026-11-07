@@ -209,6 +209,12 @@
     </applicationListeners>
 
     <actions>
+        <action id="Kilo.GenerateCommitMessage"
+                class="ai.kilocode.client.actions.GenerateCommitMessageAction"
+                icon="/icons/kilo.svg">
+            <add-to-group group-id="Vcs.MessageActionGroup" anchor="first"/>
+        </action>
+
         <action id="Kilo.Review.AddComment"
                 class="ai.kilocode.client.review.AddReviewCommentAction"
                 icon="AllIcons.General.Balloon">
