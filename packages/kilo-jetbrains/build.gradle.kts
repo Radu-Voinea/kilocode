@@ -45,8 +45,9 @@ fun checked(value: String): String {
     if (value == "0.0.0-dev") return value
     // The optional +<sha> is SemVer build metadata: it never affects release ordering (Release below
     // parses only the part before it) and only ever comes from a local override, never from a release
-    // tag, so it cannot leak into a published version.
-    require(Regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-rc\\.[0-9]+)?(\\+[0-9a-f]+)?$").matches(value)) {
+    // tag, so it cannot leak into a published version. The optional fourth number marks fork builds
+    // (7.8.27.1) layered on an upstream release.
+    require(Regex("^[0-9]+\\.[0-9]+\\.[0-9]+(\\.[0-9]+)?(-rc\\.[0-9]+)?(\\+[0-9a-f]+)?$").matches(value)) {
         "Invalid JetBrains plugin version: $value"
     }
     return value
