@@ -13,6 +13,7 @@ import { Effect } from "effect"
 import { ACPSession } from "./session"
 import { ACPPermission } from "./permission"
 import { QuestionHandler } from "@/kilocode/acp/question" // kilocode_change
+import { SuggestionHandler } from "@/kilocode/acp/suggestion" // kilocode_change
 import { Subagents } from "@/kilocode/acp/subagents" // kilocode_change
 import { Extensions } from "@/kilocode/acp/extensions" // kilocode_change
 import { partsToContentChunks, type ReplayPart } from "./content"
@@ -52,6 +53,7 @@ export class Subscription {
   private readonly idleWaiters = new Map<string, Set<ReturnType<typeof turn>>>() // kilocode_change
   private readonly permission: ACPPermission.Handler
   private readonly question: QuestionHandler // kilocode_change
+  private readonly suggestion: SuggestionHandler // kilocode_change
   private readonly subagents: Subagents // kilocode_change
   private readonly kilo: Extensions // kilocode_change
   private connected = false
@@ -69,6 +71,7 @@ export class Subscription {
     const target = (sessionId: string) => this.subagents.target(sessionId)
     this.permission = new ACPPermission.Handler({ ...input, target })
     this.question = new QuestionHandler({ ...input, target })
+    this.suggestion = new SuggestionHandler({ ...input, target })
     this.kilo = new Extensions({ ...input, subagents: this.subagents })
     // kilocode_change end
   }
@@ -77,6 +80,7 @@ export class Subscription {
   // subagents whether it shows them as sessions of their own
   setClientCapabilities(capabilities: ClientCapabilities | undefined) {
     this.question.setClientCapabilities(capabilities)
+    this.suggestion.setClientCapabilities(capabilities)
     this.subagents.setClientCapabilities(capabilities)
     this.kilo.setClientCapabilities(capabilities)
   }
@@ -154,6 +158,9 @@ export class Subscription {
       // kilocode_change start
       case "question.asked":
         this.question.handle(event)
+        return
+      case "suggestion.shown":
+        this.suggestion.handle(event)
         return
       // kilocode_change end
       case "message.updated":
