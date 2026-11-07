@@ -14,6 +14,7 @@ import { ACPSession } from "./session"
 import { ACPPermission } from "./permission"
 import { QuestionHandler } from "@/kilocode/acp/question" // kilocode_change
 import { Subagents } from "@/kilocode/acp/subagents" // kilocode_change
+import { Extensions } from "@/kilocode/acp/extensions" // kilocode_change
 import { partsToContentChunks, type ReplayPart } from "./content"
 import {
   duplicateRunningToolUpdate,
@@ -48,6 +49,7 @@ export class Subscription {
   private readonly permission: ACPPermission.Handler
   private readonly question: QuestionHandler // kilocode_change
   private readonly subagents: Subagents // kilocode_change
+  private readonly kilo: Extensions // kilocode_change
   private connected = false
   private started = false
 
@@ -63,6 +65,7 @@ export class Subscription {
     const target = (sessionId: string) => this.subagents.target(sessionId)
     this.permission = new ACPPermission.Handler({ ...input, target })
     this.question = new QuestionHandler({ ...input, target })
+    this.kilo = new Extensions({ ...input, subagents: this.subagents })
     // kilocode_change end
   }
 
@@ -71,10 +74,11 @@ export class Subscription {
   setClientCapabilities(capabilities: ClientCapabilities | undefined) {
     this.question.setClientCapabilities(capabilities)
     this.subagents.setClientCapabilities(capabilities)
+    this.kilo.setClientCapabilities(capabilities)
   }
 
-  get nativeSubagents() {
-    return this.subagents.enabled
+  get extensions() {
+    return this.kilo
   }
 
   isSubagent(sessionId: string) {
@@ -132,6 +136,7 @@ export class Subscription {
   }
 
   async handle(event: Event) {
+    await this.kilo.handle(event).catch(() => {}) // kilocode_change
     switch (event.type) {
       case "session.status":
         if (event.properties.status.type === "idle") {

@@ -28,10 +28,6 @@ export function clientSupportsNativeSubagents(capabilities: ClientCapabilities |
   return typeof air?.version === "number" && Array.isArray(air.capabilities) && air.capabilities.includes(CAPABILITY)
 }
 
-export function nativeSubagentsMeta() {
-  return { jetbrains: { air: { version: 1, capabilities: [CAPABILITY] } } }
-}
-
 /**
  * Tracks the child sessions that the task tool starts. Without this, every event, permission and
  * question of a subagent was dropped because its session id is unknown to the ACP layer, so a

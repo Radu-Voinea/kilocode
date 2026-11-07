@@ -46,7 +46,6 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { Provider } from "@/provider/provider"
 import type { Command } from "@/command"
 import { withBuiltinCommands } from "@/kilocode/acp/commands" // kilocode_change
-import { nativeSubagentsMeta } from "@/kilocode/acp/subagents" // kilocode_change
 
 export const AuthMethodID = "kilo-login" // kilocode_change
 
@@ -132,7 +131,7 @@ export function make(input: {
           list: {},
           resume: {},
         },
-        ...(events?.nativeSubagents ? { _meta: nativeSubagentsMeta() } : {}), // kilocode_change
+        ...(events?.extensions.agentMeta() ? { _meta: events.extensions.agentMeta() } : {}), // kilocode_change
       },
       authMethods: [authMethod],
       agentInfo: {
@@ -239,6 +238,7 @@ export function make(input: {
     yield* registerMcpServers(input.sdk, registeredMcp, params.cwd, state.id, params.mcpServers)
     yield* sendAvailableCommands(input.connection, state.id, snapshot)
     yield* replayMessages(events, messages)
+    yield* replayed(events, state.id, params.cwd) // kilocode_change
 
     return {
       configOptions: configOptions(snapshot, {
@@ -393,6 +393,7 @@ export function make(input: {
     yield* registerMcpServers(input.sdk, registeredMcp, params.cwd, state.id, params.mcpServers ?? [])
     yield* sendAvailableCommands(input.connection, state.id, snapshot)
     yield* replayMessages(events, messages)
+    yield* replayed(events, state.id, params.cwd) // kilocode_change
 
     return {
       sessionId: state.id,
@@ -689,6 +690,13 @@ function replayMessages(subscription: ACPEvent.Subscription | undefined, message
     }
   })
 }
+
+// kilocode_change start
+function replayed(subscription: ACPEvent.Subscription | undefined, sessionId: string, directory: string) {
+  if (!subscription) return Effect.void
+  return Effect.promise(() => subscription.extensions.replayed(sessionId, directory).catch(() => {}))
+}
+// kilocode_change end
 
 type ConfigState = {
   readonly model: Directory.DefaultModel
