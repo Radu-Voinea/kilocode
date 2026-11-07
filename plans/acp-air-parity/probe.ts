@@ -25,7 +25,7 @@ const proc = Bun.spawn(["bun", "run", "src/index.ts", "acp"], {
   cwd: pkg,
   stdin: "pipe",
   stdout: "pipe",
-  stderr: "ignore",
+  stderr: process.env.PROBE_STDERR ? "inherit" : "ignore",
   env: { ...process.env, KILO_CONFIG_CONTENT: JSON.stringify(config) },
 })
 
@@ -75,7 +75,9 @@ const short = (value: unknown, max = 300) => {
         const u = msg.params.update
         const kind = u.sessionUpdate
         const who = tag(msg.params.sessionId)
-        if (
+        if (kind === "agent_message_chunk" && process.env.PROBE_TEXT) {
+          log.push(`${who} text ${short(u.content?.text)}`)
+        } else if (
           ["agent_message_chunk", "agent_thought_chunk", "usage_update", "available_commands_update"].includes(kind)
         ) {
           log.push(`${who} ${kind}`)
@@ -119,7 +121,12 @@ const capabilities = air
   ? { elicitation: { form: {} }, _meta: { jetbrains: { air: { version: 1, capabilities: AIR_CAPABILITIES } } } }
   : {}
 const init = await call("initialize", { protocolVersion: 1, clientCapabilities: capabilities })
-console.log("agent _meta:", JSON.stringify(init.result?.agentCapabilities?._meta ?? null))
+console.log(
+  "agent _meta:",
+  JSON.stringify(init.result?.agentCapabilities?._meta ?? null),
+  "top-level _meta:",
+  JSON.stringify(init.result?._meta ?? null),
+)
 
 const timer = setTimeout(() => {
   console.log("TIMEOUT after 300s")
@@ -218,6 +225,26 @@ scenarios.report = async () => {
     root,
     { jetbrains: { air: { agentFileChangeReportRequest: { version: 1, requestId: "probe-report-1" } } } },
   )
+}
+
+scenarios.steer = async () => {
+  root = (await newSession()).sessionId
+  const running = prompt(
+    "Run the shell command `sleep 12 && echo first-done` and then reply with exactly the command's output.",
+  )
+  await Bun.sleep(6000)
+  const steered = await call("_session/steering", {
+    sessionId: root,
+    prompt: [{ type: "text", text: "Additionally, end your final reply with the word BANANA." }],
+  })
+  log.push(`== steering -> ${short(steered.result ?? steered.error)}`)
+  await running
+  const idle = await call("_session/steering", {
+    sessionId: root,
+    prompt: [{ type: "text", text: "x" }],
+    _meta: { steering: { idleBehavior: "promptRequired" } },
+  })
+  log.push(`== steering while idle -> ${short(idle.result ?? idle.error)}`)
 }
 
 const run = scenarios[scenario]

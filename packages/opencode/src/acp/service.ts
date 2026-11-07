@@ -46,6 +46,7 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { Provider } from "@/provider/provider"
 import type { Command } from "@/command"
 import { withBuiltinCommands } from "@/kilocode/acp/commands" // kilocode_change
+import * as KiloMethods from "@/kilocode/acp/methods" // kilocode_change
 
 export const AuthMethodID = "kilo-login" // kilocode_change
 
@@ -69,6 +70,7 @@ export type Interface = {
   readonly setSessionModel: (input: SetSessionModelRequest) => Effect.Effect<SetSessionModelResponse, Error>
   readonly prompt: (input: PromptRequest) => Effect.Effect<PromptResponse, Error>
   readonly cancel: (input: CancelNotification) => Effect.Effect<void, Error>
+  readonly extMethod: (method: string, params: Record<string, unknown>) => Promise<Record<string, unknown>> // kilocode_change
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/ACP/Service") {}
@@ -114,6 +116,7 @@ export function make(input: {
     }
 
     const response = {
+      _meta: KiloMethods.steeringMeta(), // kilocode_change
       protocolVersion: 1,
       agentCapabilities: {
         loadSession: true,
@@ -171,6 +174,10 @@ export function make(input: {
       const state = yield* session.tryGet(params.sessionId)
       events?.extensions.promptStarted(params.sessionId, params._meta)
       return yield* run(params).pipe(
+        // a steered message runs as a turn of its own; the prompt ends after it
+        Effect.tap(() =>
+          Effect.promise(() => events?.extensions.steering.settled(params.sessionId) ?? Promise.resolve()),
+        ),
         Effect.onExit((exit) =>
           Effect.promise(() => {
             const failure =
@@ -530,7 +537,9 @@ export function make(input: {
     return {}
   })
 
-  return {
+  // kilocode_change start - extension methods call back into the service
+  const api: Interface = {
+    // kilocode_change end
     initialize,
     authenticate,
     newSession,
@@ -628,7 +637,17 @@ export function make(input: {
       }),
     ), // kilocode_change
     cancel,
+    // kilocode_change start
+    extMethod: (method, params) =>
+      KiloMethods.handle(method, params, {
+        sdk: input.sdk,
+        session,
+        extensions: events?.extensions,
+        prompt: (params) => Effect.runPromise(api.prompt(params).pipe(Effect.mapError(ACPError.toRequestError))),
+      }),
+    // kilocode_change end
   }
+  return api // kilocode_change
 }
 
 function makeSessionService() {

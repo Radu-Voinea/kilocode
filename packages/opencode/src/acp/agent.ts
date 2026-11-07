@@ -83,6 +83,12 @@ export class Agent implements ACPAgent {
   cancel(params: CancelNotification) {
     return run(this.service.cancel(params))
   }
+
+  // kilocode_change start - Kilo's ACP extension methods, such as steering
+  extMethod(method: string, params: Record<string, unknown>) {
+    return this.service.extMethod(method, params)
+  }
+  // kilocode_change end
 }
 
 function run<A>(effect: Effect.Effect<A, ACPService.Error>) {

@@ -10,6 +10,7 @@ import { setClient } from "./client"
 import { Modes, type ConfigOptions } from "./modes"
 import { Plans } from "./plan"
 import { CAPABILITY as REPORT, Reports } from "./reports"
+import { Steering } from "./steering"
 import type { Subagents } from "./subagents"
 import { Titles } from "./titles"
 
@@ -26,7 +27,9 @@ export class Extensions {
   private readonly compactions: Compactions
   private readonly failures: Failures
   private readonly reports: Reports
+  readonly steering = new Steering()
   private capabilities: ClientCapabilities | undefined
+  private readonly running = new Set<string>()
 
   constructor(
     private readonly input: {
@@ -79,6 +82,7 @@ export class Extensions {
       }
       case "message.updated": {
         const info = event.properties.info
+        if (info.role === "user") this.steering.message(info.sessionID)
         if (info.role === "user") await this.modes.message(info)
         if (info.role === "assistant") await this.compactions.message(info.sessionID, info)
         return
@@ -96,6 +100,10 @@ export class Extensions {
       case "session.status": {
         const id = event.properties.sessionID
         const status = event.properties.status
+        if (status.type === "idle") this.running.delete(id)
+        if (status.type !== "idle") this.running.add(id)
+        if (status.type === "idle") this.steering.idle(id)
+        if (status.type === "busy") this.steering.busy(id)
         if (status.type === "busy") this.failures.busy(id)
         if (status.type === "retry" && (await this.known(id)))
           await this.failures.retry(id, status.attempt, status.message)
@@ -129,6 +137,11 @@ export class Extensions {
   completed<T extends ToolCallUpdate>(part: ToolPart, update: T): T {
     if (!this.supports(DIFF)) return update
     return { ...update, content: patchContent(part, update.content ?? undefined) }
+  }
+
+  /** Whether a turn of the session is running. */
+  busy(sessionId: string) {
+    return this.running.has(sessionId)
   }
 
   /** A prompt starts: Air may ask for the files the turn changes. */
