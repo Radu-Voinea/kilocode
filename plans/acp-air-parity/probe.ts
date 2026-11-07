@@ -128,8 +128,12 @@ const timer = setTimeout(() => {
   process.exit(1)
 }, 300_000)
 
-const prompt = async (text: string, sessionId = root) => {
-  const res = await call("session/prompt", { sessionId, prompt: [{ type: "text", text }] })
+const prompt = async (text: string, sessionId = root, meta?: object) => {
+  const res = await call("session/prompt", {
+    sessionId,
+    prompt: [{ type: "text", text }],
+    ...(meta ? { _meta: meta } : {}),
+  })
   log.push(`== prompt done: ${res.result?.stopReason ?? short(res.error)}`)
   return res
 }
@@ -202,6 +206,17 @@ scenarios.diff = async () => {
   root = (await newSession()).sessionId
   await prompt(
     "In notes.txt replace the line beta with BETA using the edit tool, then create new.txt containing the single line hello using the write tool. Do nothing else.",
+  )
+}
+
+scenarios.report = async () => {
+  await Bun.write(`${cwd}/one.txt`, "one\n")
+  await Bun.write(`${cwd}/two.txt`, "two\n")
+  root = (await newSession()).sessionId
+  await prompt(
+    "Append the line edited to one.txt with the edit tool, and run the shell command `echo edited >> two.txt`. Do nothing else.",
+    root,
+    { jetbrains: { air: { agentFileChangeReportRequest: { version: 1, requestId: "probe-report-1" } } } },
   )
 }
 

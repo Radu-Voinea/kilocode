@@ -165,6 +165,29 @@ export function make(input: {
     return loaded
   })
 
+  // kilocode_change start - Air asks each prompt for the files its turn changed
+  const reported = (run: (params: PromptRequest) => Effect.Effect<PromptResponse, Error>) => (params: PromptRequest) =>
+    Effect.gen(function* () {
+      const state = yield* session.tryGet(params.sessionId)
+      events?.extensions.promptStarted(params.sessionId, params._meta)
+      return yield* run(params).pipe(
+        Effect.onExit((exit) =>
+          Effect.promise(() => {
+            const failure =
+              exit._tag === "Failure"
+                ? ("providerError" as const)
+                : exit.value.stopReason === "cancelled"
+                  ? ("cancelled" as const)
+                  : undefined
+            return (
+              events?.extensions.promptEnded(params.sessionId, state?.cwd ?? "", failure) ?? Promise.resolve()
+            ).catch(() => {})
+          }),
+        ),
+      )
+    })
+  // kilocode_change end
+
   // kilocode_change start - a failed turn becomes an Air session failure when the client shows them
   const failed = (sessionId: string) => (error: AssistantError) => events?.extensions.failed(sessionId, error)
   // kilocode_change end
@@ -519,88 +542,91 @@ export function make(input: {
     setSessionConfigOption,
     setSessionMode,
     setSessionModel,
-    prompt: Effect.fn("ACP.prompt")(function* (params: PromptRequest) {
-      const current = yield* session.get(params.sessionId)
-      const snapshot = yield* directorySnapshot(current.cwd)
-      const selected = current.model ?? selectDefaultModel(snapshot)
-      if (!current.model) {
-        yield* session.setModel(params.sessionId, selected)
-      }
-      const variant = current.variant ?? selectVariant(snapshot, selected)
-      const modeId = current.modeId ?? (snapshot.availableModes.length > 0 ? snapshot.defaultModeID : undefined)
-      const parts = promptContentToParts(params.prompt)
-      const command = detectSlashCommand(parts)
+    // kilocode_change - reports the files a turn changed before its response
+    prompt: reported(
+      Effect.fn("ACP.prompt")(function* (params: PromptRequest) {
+        const current = yield* session.get(params.sessionId)
+        const snapshot = yield* directorySnapshot(current.cwd)
+        const selected = current.model ?? selectDefaultModel(snapshot)
+        if (!current.model) {
+          yield* session.setModel(params.sessionId, selected)
+        }
+        const variant = current.variant ?? selectVariant(snapshot, selected)
+        const modeId = current.modeId ?? (snapshot.availableModes.length > 0 ? snapshot.defaultModeID : undefined)
+        const parts = promptContentToParts(params.prompt)
+        const command = detectSlashCommand(parts)
 
-      if (!command) {
-        const response = yield* request(
-          () =>
-            runUntilIdle(current.id, () =>
-              input.sdk.session.prompt(
-                {
-                  sessionID: current.id,
-                  model: {
+        if (!command) {
+          const response = yield* request(
+            () =>
+              runUntilIdle(current.id, () =>
+                input.sdk.session.prompt(
+                  {
+                    sessionID: current.id,
+                    model: {
+                      providerID: selected.providerID,
+                      modelID: selected.modelID,
+                    },
+                    ...(variant ? { variant } : {}),
+                    parts,
+                    ...(modeId ? { agent: modeId } : {}),
+                    directory: current.cwd,
+                  },
+                  { throwOnError: true },
+                ),
+              ),
+            "session",
+          )
+          yield* sendUsageUpdate(input.usage, input.sdk, input.connection, current.id, current.cwd)
+          return yield* promptResponse(response.info, params.messageId, failed(current.id)) // kilocode_change
+        }
+
+        const known = snapshot.availableCommands.find((item) => item.name === command.name)
+        if (known) {
+          const response = yield* request(
+            () =>
+              runUntilIdle(current.id, () =>
+                input.sdk.session.command(
+                  {
+                    sessionID: current.id,
+                    command: known.name,
+                    arguments: command.args,
+                    model: `${selected.providerID}/${selected.modelID}`,
+                    ...(variant ? { variant } : {}),
+                    ...(modeId ? { agent: modeId } : {}),
+                    directory: current.cwd,
+                  },
+                  { throwOnError: true },
+                ),
+              ),
+            "session",
+          )
+          yield* sendUsageUpdate(input.usage, input.sdk, input.connection, current.id, current.cwd)
+          return yield* promptResponse(response.info, params.messageId, failed(current.id)) // kilocode_change
+        }
+
+        if (command.name === "compact") {
+          yield* request(
+            () =>
+              runUntilIdle(current.id, () =>
+                input.sdk.session.summarize(
+                  {
+                    sessionID: current.id,
+                    directory: current.cwd,
                     providerID: selected.providerID,
                     modelID: selected.modelID,
                   },
-                  ...(variant ? { variant } : {}),
-                  parts,
-                  ...(modeId ? { agent: modeId } : {}),
-                  directory: current.cwd,
-                },
-                { throwOnError: true },
+                  { throwOnError: true },
+                ),
               ),
-            ),
-          "session",
-        )
+            "session",
+          )
+        }
+
         yield* sendUsageUpdate(input.usage, input.sdk, input.connection, current.id, current.cwd)
-        return yield* promptResponse(response.info, params.messageId, failed(current.id)) // kilocode_change
-      }
-
-      const known = snapshot.availableCommands.find((item) => item.name === command.name)
-      if (known) {
-        const response = yield* request(
-          () =>
-            runUntilIdle(current.id, () =>
-              input.sdk.session.command(
-                {
-                  sessionID: current.id,
-                  command: known.name,
-                  arguments: command.args,
-                  model: `${selected.providerID}/${selected.modelID}`,
-                  ...(variant ? { variant } : {}),
-                  ...(modeId ? { agent: modeId } : {}),
-                  directory: current.cwd,
-                },
-                { throwOnError: true },
-              ),
-            ),
-          "session",
-        )
-        yield* sendUsageUpdate(input.usage, input.sdk, input.connection, current.id, current.cwd)
-        return yield* promptResponse(response.info, params.messageId, failed(current.id)) // kilocode_change
-      }
-
-      if (command.name === "compact") {
-        yield* request(
-          () =>
-            runUntilIdle(current.id, () =>
-              input.sdk.session.summarize(
-                {
-                  sessionID: current.id,
-                  directory: current.cwd,
-                  providerID: selected.providerID,
-                  modelID: selected.modelID,
-                },
-                { throwOnError: true },
-              ),
-            ),
-          "session",
-        )
-      }
-
-      yield* sendUsageUpdate(input.usage, input.sdk, input.connection, current.id, current.cwd)
-      return yield* promptResponse(undefined, params.messageId)
-    }),
+        return yield* promptResponse(undefined, params.messageId)
+      }),
+    ), // kilocode_change
     cancel,
   }
 }

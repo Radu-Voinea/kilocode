@@ -9,6 +9,7 @@ import { CAPABILITY as FAILURE, Failures } from "./failures"
 import { setClient } from "./client"
 import { Modes, type ConfigOptions } from "./modes"
 import { Plans } from "./plan"
+import { CAPABILITY as REPORT, Reports } from "./reports"
 import type { Subagents } from "./subagents"
 import { Titles } from "./titles"
 
@@ -24,6 +25,7 @@ export class Extensions {
   private readonly modes: Modes
   private readonly compactions: Compactions
   private readonly failures: Failures
+  private readonly reports: Reports
   private capabilities: ClientCapabilities | undefined
 
   constructor(
@@ -39,6 +41,7 @@ export class Extensions {
     this.modes = new Modes(input)
     this.compactions = new Compactions(input, () => isAir(this.capabilities))
     this.failures = new Failures(input, () => this.supports(FAILURE))
+    this.reports = new Reports(input)
   }
 
   setClientCapabilities(capabilities: ClientCapabilities | undefined) {
@@ -62,6 +65,7 @@ export class Extensions {
       ...(this.input.subagents.enabled ? ["nativeSubagentSessions"] : []),
       ...(this.supports(FAILURE) ? [FAILURE] : []),
       ...(this.supports(DIFF) ? [DIFF] : []),
+      ...(this.supports(REPORT) ? [REPORT] : []),
     ]
     return capabilityMeta(names)
   }
@@ -81,6 +85,7 @@ export class Extensions {
       }
       case "message.part.updated": {
         const part = event.properties.part
+        this.reports.part(part.sessionID, part)
         if (part.type !== "compaction" || !(await this.known(part.sessionID))) return
         await this.compactions.part(part.sessionID, part)
         return
@@ -124,6 +129,16 @@ export class Extensions {
   completed<T extends ToolCallUpdate>(part: ToolPart, update: T): T {
     if (!this.supports(DIFF)) return update
     return { ...update, content: patchContent(part, update.content ?? undefined) }
+  }
+
+  /** A prompt starts: Air may ask for the files the turn changes. */
+  promptStarted(sessionId: string, meta: unknown) {
+    if (this.supports(REPORT)) this.reports.start(sessionId, meta)
+  }
+
+  /** A prompt ends, before its response: reports the files it changed if Air asked. */
+  async promptEnded(sessionId: string, cwd: string, failure?: "cancelled" | "providerError") {
+    await this.reports.finish(sessionId, cwd, failure)
   }
 
   /** The `_meta` that ends a failed turn as an Air session failure, or undefined to fail it as before. */

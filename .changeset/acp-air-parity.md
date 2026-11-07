@@ -10,3 +10,4 @@ ACP clients such as JetBrains Air now see:
 - Context compaction as a "Compact conversation" step with its summary and token counts (JetBrains Air)
 - Failed turns and provider retries as typed session failures (JetBrains Air)
 - Edits and new files as real diffs built from Kilo's own patch (JetBrains Air)
+- The files each turn changed, for reviewing a turn (JetBrains Air)
