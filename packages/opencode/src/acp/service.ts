@@ -45,6 +45,7 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { Provider } from "@/provider/provider"
 import type { Command } from "@/command"
+import { withBuiltinCommands } from "@/kilocode/acp/commands" // kilocode_change
 
 export const AuthMethodID = "kilo-login" // kilocode_change
 
@@ -948,10 +949,14 @@ function sendAvailableCommands(
         sessionId,
         update: {
           sessionUpdate: "available_commands_update",
-          availableCommands: snapshot.availableCommands.map((command) => ({
-            name: command.name,
-            description: command.description ?? "",
-          })),
+          // kilocode_change start - also offer /compact, which the prompt handler runs itself
+          availableCommands: withBuiltinCommands(
+            snapshot.availableCommands.map((command) => ({
+              name: command.name,
+              description: command.description ?? "",
+            })),
+          ),
+          // kilocode_change end
         },
       })
     }, 0)
