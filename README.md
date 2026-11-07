@@ -8,7 +8,7 @@ Install or update the CLI and the JetBrains plugin to the latest fork build:
 curl -fsSL https://raw.githubusercontent.com/Radu-Voinea/kilocode/main/script/fork-install.sh | bash
 ```
 
-- The CLI replaces `~/.kilo/bin`; the previous install is kept in `~/.kilo/bin.bak`.
+- The CLI replaces `~/.kilo/bin`; the previous install is kept in `~/.kilo/bin.bak`. Running Kilo ACP agents (for example Air's custom "Kilo (fork)" agent) are stopped, so the IDE starts the new version with your next message. Kilo sessions in a terminal keep running.
 - The plugin replaces the Kilo plugin in every JetBrains IDE that already has it installed; previous copies are kept in `~/.kilo/jetbrains-backup`. Restart open IDEs afterwards. Set `KILO_SKIP_JETBRAINS=1` to update only the CLI.
 - To install a specific build, pass its tag: `... | bash -s v7.8.27.1`.
 

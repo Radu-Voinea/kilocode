@@ -5,7 +5,8 @@
 #   curl -fsSL https://raw.githubusercontent.com/Radu-Voinea/kilocode/main/script/fork-install.sh | bash
 #
 # The CLI replaces ~/.kilo/bin (KILO_INSTALL_DIR overrides it) and the previous install is kept in
-# <dir>.bak. The plugin replaces the Kilo plugin in every JetBrains IDE that already has it
+# <dir>.bak, and running Kilo ACP agents are stopped so the IDE restarts them on the new CLI.
+# The plugin replaces the Kilo plugin in every JetBrains IDE that already has it
 # installed; previous copies are kept in ~/.kilo/jetbrains-backup. Set KILO_SKIP_JETBRAINS=1 to
 # leave the plugin alone. Pass a tag such as v7.8.27.1 as the first argument to install that
 # release instead of the latest one.
@@ -48,6 +49,16 @@ mkdir -p "$tmp/bin"
 tar -xzf "$tmp/kilo-linux-x64.tar.gz" -C "$tmp/bin"
 version=$("$tmp/bin/kilo" --version)
 
+# ACP agents (Air's "Kilo (fork)") still running an installed CLI, including one left in the
+# backup by an earlier update. They are stopped after the swap so the IDE starts the new one.
+agents=()
+for proc in /proc/[0-9]*; do
+  exe=$(readlink "$proc/exe" 2>/dev/null) || continue
+  case "$exe" in "$dir/kilo" | "$dir/kilo (deleted)" | "$dir.bak/kilo" | "$dir.bak/kilo (deleted)") ;; *) continue ;; esac
+  args=" $(tr '\0' ' ' < "$proc/cmdline" 2>/dev/null) "
+  [[ "$args" == *" acp "* ]] && agents+=("${proc#/proc/}")
+done
+
 mkdir -p "$(dirname "$dir")"
 if [ -d "$dir" ]; then
   rm -rf "$dir.bak"
@@ -57,6 +68,11 @@ mv "$tmp/bin" "$dir"
 
 echo "Installed Kilo CLI $version to $dir"
 [ -d "$dir.bak" ] && echo "Previous CLI kept in $dir.bak"
+
+if [ "${#agents[@]}" -gt 0 ]; then
+  kill -TERM "${agents[@]}" 2>/dev/null || true
+  echo "Stopped ${#agents[@]} running Kilo ACP agent(s); your IDE starts the new version on the next message."
+fi
 
 # JetBrains plugin: only IDEs that already have Kilo installed get the update.
 [ "${KILO_SKIP_JETBRAINS:-}" = "1" ] && exit 0
