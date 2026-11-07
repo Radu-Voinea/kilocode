@@ -2,15 +2,17 @@
 
 This fork builds Kilo from `main` on every push and publishes it as a [GitHub release](https://github.com/Radu-Voinea/kilocode/releases) with a four-part version: the upstream version plus a build number (`7.8.27.1`, `7.8.27.2`, ...). Builds are Linux x64 only.
 
-Install or update the CLI to the latest fork build (replaces `~/.kilo/bin`, keeps the previous install in `~/.kilo/bin.bak`):
+Install or update the CLI and the JetBrains plugin to the latest fork build:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Radu-Voinea/kilocode/main/script/fork-install.sh | bash
 ```
 
-To install a specific build, pass its tag: `... | bash -s v7.8.27.1`.
+- The CLI replaces `~/.kilo/bin`; the previous install is kept in `~/.kilo/bin.bak`.
+- The plugin replaces the Kilo plugin in every JetBrains IDE that already has it installed; previous copies are kept in `~/.kilo/jetbrains-backup`. Restart open IDEs afterwards. Set `KILO_SKIP_JETBRAINS=1` to update only the CLI.
+- To install a specific build, pass its tag: `... | bash -s v7.8.27.1`.
 
-The JetBrains plugin with the same CLI bundled is [kilo-code-jetbrains.zip](https://github.com/Radu-Voinea/kilocode/releases/latest/download/kilo-code-jetbrains.zip). Install it with **Settings → Plugins → ⚙ → Install Plugin from Disk…**.
+To add the plugin to an IDE that doesn't have Kilo yet, install [kilo-code-jetbrains.zip](https://github.com/Radu-Voinea/kilocode/releases/latest/download/kilo-code-jetbrains.zip) once with **Settings → Plugins → ⚙ → Install Plugin from Disk…**; the script keeps it updated from then on.
 
 # Important: `main` is not accepting new features
 
