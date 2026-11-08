@@ -36,6 +36,13 @@ internal class PromptPasteActionHandler(private val original: EditorActionHandle
                 attach.paste(item)
                 return
             }
+            if (attach != null) {
+                val native = NativeClipboard.attachable(ideEmpty = item == null)
+                if (native != null) {
+                    attach.paste(native)
+                    return
+                }
+            }
             val value = item?.let(::collapsibleText)
             if (value != null && text != null && editor.document.isWritable) {
                 text.paste(value)

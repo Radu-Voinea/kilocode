@@ -1393,7 +1393,72 @@ class PromptPanelTest : BasePlatformTestCase() {
         val id = com.intellij.openapi.actionSystem.IdeActions.ACTION_EDITOR_PASTE
         val old = manager.getActionHandler(id)
         manager.setActionHandler(id, ai.kilocode.client.session.ui.prompt.PromptPasteActionHandler(old))
-        com.intellij.openapi.util.Disposer.register(testRootDisposable) { manager.setActionHandler(id, old) }
+        val source = ai.kilocode.client.session.ui.prompt.NativeClipboard.source
+        ai.kilocode.client.session.ui.prompt.NativeClipboard.source = native
+        com.intellij.openapi.util.Disposer.register(testRootDisposable) {
+            manager.setActionHandler(id, old)
+            ai.kilocode.client.session.ui.prompt.NativeClipboard.source = source
+        }
+    }
+
+    /** The desktop clipboard the paste handler falls back to; empty unless a test fills it. */
+    private val native = object : ai.kilocode.client.session.ui.prompt.NativeClipboard.Source {
+        val data = linkedMapOf<String, ByteArray>()
+
+        override fun types(): List<String> = data.keys.toList()
+
+        override fun read(type: String): ByteArray? = data[type]
+    }
+
+    private fun png(): ByteArray = java.io.ByteArrayOutputStream().also {
+        javax.imageio.ImageIO.write(BufferedImage(3, 3, BufferedImage.TYPE_INT_ARGB), "png", it)
+    }.toByteArray()
+
+    // On native Wayland the IDE sees no image on the clipboard (or only its own last text copy), so the
+    // handler asks the desktop clipboard tools.
+    fun `test editor paste action attaches a desktop clipboard image the ide cannot see`() {
+        val panel = PromptPanel(project, { _, _ -> }, {}, { _, _ -> })
+        val ed = realizedEditor(panel)
+        installPasteHandler()
+        CopyPasteManager.getInstance().setContents(StringSelection("stale"))
+        native.data["image/png"] = png()
+
+        paste(ed)
+        waitForAttachments(panel, 1)
+
+        assertEquals(1, panel.attachmentCountForTest())
+        assertEquals("", ed.document.text)
+    }
+
+    fun `test editor paste action keeps text when the desktop clipboard also offers it`() {
+        val panel = PromptPanel(project, { _, _ -> }, {}, { _, _ -> })
+        val ed = realizedEditor(panel)
+        installPasteHandler()
+        CopyPasteManager.getInstance().setContents(StringSelection("cells"))
+        native.data["text/plain"] = "cells".toByteArray()
+        native.data["image/png"] = png()
+
+        paste(ed)
+
+        assertEquals("cells", ed.document.text)
+        assertEquals(0, panel.attachmentCountForTest())
+    }
+
+    fun `test editor paste action attaches files from a desktop uri list`() {
+        val panel = PromptPanel(project, { _, _ -> }, {}, { _, _ -> })
+        val ed = realizedEditor(panel)
+        installPasteHandler()
+        val file = File.createTempFile("kilo-native", ".png")
+        file.writeBytes(png())
+        CopyPasteManager.getInstance().setContents(StringSelection(file.path))
+        native.data["text/plain"] = file.path.toByteArray()
+        native.data["text/uri-list"] = (file.toURI().toString() + "\r\n").toByteArray()
+
+        paste(ed)
+        waitForAttachments(panel, 1)
+
+        assertEquals(1, panel.attachmentCountForTest())
+        assertEquals("", ed.document.text)
     }
 
     private fun paste(editor: Editor) {
