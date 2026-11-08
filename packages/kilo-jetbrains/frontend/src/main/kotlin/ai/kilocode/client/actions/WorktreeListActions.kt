@@ -60,8 +60,8 @@ class WorktreeColorGroup : com.intellij.openapi.actionSystem.ActionGroup(), Dumb
 
     override fun getChildren(e: AnActionEvent?): Array<AnAction> {
         val view = e?.project?.service<WorktreeListView>()
-        val colors = view?.palette ?: WorktreeColor.entries
-        return (colors.map { SetColor(it, view?.label(it) ?: it.label) } +
+        val colors = view?.palette ?: WorktreeColor.DEFAULTS
+        return (colors.map { SetColor(it, it.name) } +
             com.intellij.openapi.actionSystem.Separator.create() +
             SetColor(null, KiloBundle.message("worktree.color.none")) +
             com.intellij.openapi.actionSystem.Separator.create() +

@@ -39,13 +39,18 @@ class ColorDotIcon(private val color: Color, private val size: Int = 12) : Icon 
     }
 }
 
-/** Renames and reorders the worktree colors of one project. The order is the Color menu and color groups order. */
+/**
+ * Edits the worktree colors of one project: add, remove, rename, recolor and reorder. The order is the Color
+ * menu and color groups order. Double-click a swatch (or use the paint button) to pick its shade.
+ */
 class WorktreeColorsDialog(project: Project, private val view: WorktreeListView) : DialogWrapper(project) {
-    private val model = Model(view.palette.map { Entry(it, view.label(it)) }.toMutableList())
+    private val model = Model(view.palette.toMutableList())
     private val table = JBTable(model)
+    private var reset = false
 
     init {
         title = KiloBundle.message("worktree.colors.title")
+        setOKButtonText(KiloBundle.message("worktree.colors.save"))
         table.setShowGrid(false)
         table.tableHeader.reorderingAllowed = false
         table.selectionModel.selectionMode = ListSelectionModel.SINGLE_SELECTION
@@ -64,27 +69,87 @@ class WorktreeColorsDialog(project: Project, private val view: WorktreeListView)
                 }
             }
         }
-        table.setRowSelectionInterval(0, 0)
+        table.addMouseListener(object : java.awt.event.MouseAdapter() {
+            override fun mouseClicked(e: java.awt.event.MouseEvent) {
+                if (e.clickCount == 2 && table.columnAtPoint(e.point) == 0) recolor(table.rowAtPoint(e.point))
+            }
+        })
+        if (model.rowCount > 0) table.setRowSelectionInterval(0, 0)
         init()
     }
 
     override fun createCenterPanel(): JComponent =
         ToolbarDecorator.createDecorator(table)
-            .disableAddAction()
-            .disableRemoveAction()
+            .setAddAction { add() }
+            .setRemoveAction { remove(table.selectedRow) }
+            .addExtraAction(object : com.intellij.openapi.project.DumbAwareAction(
+                KiloBundle.message("worktree.colors.recolor"), null, com.intellij.icons.AllIcons.Actions.Colors,
+            ) {
+                override fun getActionUpdateThread() = com.intellij.openapi.actionSystem.ActionUpdateThread.EDT
+
+                override fun update(e: com.intellij.openapi.actionSystem.AnActionEvent) {
+                    e.presentation.isEnabled = table.selectedRow >= 0
+                }
+
+                override fun actionPerformed(e: com.intellij.openapi.actionSystem.AnActionEvent) = recolor(table.selectedRow)
+            })
+            .addExtraAction(object : com.intellij.openapi.project.DumbAwareAction(
+                KiloBundle.message("worktree.colors.reset"), null, com.intellij.icons.AllIcons.Actions.Rollback,
+            ) {
+                override fun getActionUpdateThread() = com.intellij.openapi.actionSystem.ActionUpdateThread.EDT
+
+                override fun actionPerformed(e: com.intellij.openapi.actionSystem.AnActionEvent) = restore()
+            })
             .createPanel()
-            .apply { preferredSize = JBUI.size(320, 300) }
+            .apply { preferredSize = JBUI.size(340, 320) }
 
     override fun getPreferredFocusedComponent(): JComponent = table
 
     override fun doOKAction() {
         if (table.isEditing) table.cellEditor?.stopCellEditing()
-        view.setPalette(model.rows.map { it.color }, model.rows.associate { it.color to it.name })
+        if (reset && model.rows == WorktreeColor.DEFAULTS) view.resetPalette() else view.setPalette(model.rows.toList())
         super.doOKAction()
     }
 
+    private fun add() {
+        val used = model.rows.map { it.rgb }.toSet()
+        val seed = WorktreeColor.DEFAULTS.firstOrNull { it.rgb !in used }?.swatch ?: Color(0x4A8FE7)
+        val picked = pick(seed) ?: return
+        insert(WorktreeColor.create(KiloBundle.message("worktree.colors.new"), picked.rgb))
+        val row = model.rowCount - 1
+        table.setRowSelectionInterval(row, row)
+        table.editCellAt(row, 1)
+        table.editorComponent?.requestFocusInWindow()
+    }
+
+    private fun recolor(row: Int) {
+        if (row !in 0 until model.rowCount) return
+        val picked = pick(model.rows[row].swatch) ?: return
+        model.update(row) { it.copy(rgb = picked.rgb and 0xFFFFFF) }
+    }
+
+    private fun pick(start: Color): Color? =
+        com.intellij.ui.ColorChooserService.getInstance().showDialog(table, KiloBundle.message("worktree.colors.pick"), start, false)
+
     /** What the dialog would save, for tests. */
-    internal val rows: List<Pair<WorktreeColor, String>> get() = model.rows.map { it.color to it.name }
+    internal val rows: List<WorktreeColor> get() = model.rows.toList()
+
+    internal fun insert(color: WorktreeColor) = model.insert(color)
+
+    internal fun remove(row: Int) {
+        if (row !in 0 until model.rowCount) return
+        model.removeRow(row)
+        if (model.rowCount > 0) {
+            val next = row.coerceAtMost(model.rowCount - 1)
+            table.setRowSelectionInterval(next, next)
+        }
+    }
+
+    internal fun restore() {
+        if (table.isEditing) table.cellEditor?.cancelCellEditing()
+        model.replace(WorktreeColor.DEFAULTS)
+        reset = true
+    }
 
     internal fun move(from: Int, to: Int) = model.exchangeRows(from, to)
 
@@ -92,9 +157,7 @@ class WorktreeColorsDialog(project: Project, private val view: WorktreeListView)
 
     internal fun save() = doOKAction()
 
-    private class Entry(val color: WorktreeColor, var name: String)
-
-    private class Model(val rows: MutableList<Entry>) : AbstractTableModel(), EditableModel {
+    private class Model(val rows: MutableList<WorktreeColor>) : AbstractTableModel(), EditableModel {
         override fun getRowCount(): Int = rows.size
 
         override fun getColumnCount(): Int = 2
@@ -102,19 +165,39 @@ class WorktreeColorsDialog(project: Project, private val view: WorktreeListView)
         override fun getColumnName(column: Int): String =
             if (column == 0) "" else KiloBundle.message("worktree.colors.name")
 
-        override fun getValueAt(row: Int, column: Int): Any = if (column == 0) rows[row].color else rows[row].name
+        override fun getValueAt(row: Int, column: Int): Any = if (column == 0) rows[row] else rows[row].name
 
         override fun isCellEditable(row: Int, column: Int): Boolean = column == 1
 
         override fun setValueAt(value: Any?, row: Int, column: Int) {
             if (column != 1) return
-            rows[row].name = value?.toString().orEmpty()
-            fireTableCellUpdated(row, column)
+            val name = value?.toString()?.trim().orEmpty()
+            if (name.isEmpty()) return
+            update(row) { it.copy(name = name) }
+        }
+
+        fun update(row: Int, change: (WorktreeColor) -> WorktreeColor) {
+            rows[row] = change(rows[row])
+            fireTableRowsUpdated(row, row)
+        }
+
+        fun insert(color: WorktreeColor) {
+            rows += color
+            fireTableRowsInserted(rows.size - 1, rows.size - 1)
+        }
+
+        fun replace(colors: List<WorktreeColor>) {
+            rows.clear()
+            rows += colors
+            fireTableDataChanged()
         }
 
         override fun addRow() = Unit
 
-        override fun removeRow(idx: Int) = Unit
+        override fun removeRow(idx: Int) {
+            rows.removeAt(idx)
+            fireTableRowsDeleted(idx, idx)
+        }
 
         override fun canExchangeRows(oldIndex: Int, newIndex: Int): Boolean =
             oldIndex in rows.indices && newIndex in rows.indices

@@ -737,7 +737,7 @@ class AgentManagerPanelTest : BasePlatformTestCase() {
         val solo = worktree("c").copy(branch = "solo")
         rpc.listed += listOf(solo, fix, feature)
         edt {
-            view.setColor(fix.path, WorktreeColor.BLUE)
+            view.setColor(fix.path, WorktreeColor.default("BLUE"))
             view.grouping = WorktreeGrouping.PREFIX
             view.sort = WorktreeSort.NAME
         }
@@ -754,7 +754,7 @@ class AgentManagerPanelTest : BasePlatformTestCase() {
             }
             assertEquals(listOf("feature/", "fix/", KiloBundle.message("worktree.group.other")), groups)
             assertEquals(listOf("feature/a", "fix/b", "solo"), (0 until rows(panel)).map { (row(panel, it) as ActiveItem).search!!.split(" ")[1] })
-            assertEquals(WorktreeColor.BLUE.fill, row(panel, 1).color)
+            assertEquals(WorktreeColor.default("BLUE").fill, row(panel, 1).color)
         } finally {
             edt {
                 view.setColor(fix.path, null)
@@ -764,39 +764,48 @@ class AgentManagerPanelTest : BasePlatformTestCase() {
         }
     }
 
-    fun `test color groups follow the renamed and reordered palette`() {
+    fun `test color groups follow the user's palette and lose a removed color`() {
         val view = project.service<WorktreeListView>()
         val red = worktree("a")
         val blue = worktree("b")
-        rpc.listed += listOf(red, blue)
+        val mine = worktree("c")
+        rpc.listed += listOf(red, blue, mine)
+        val custom = WorktreeColor.create("Hotfixes", 0x123456)
         edt {
-            view.setColor(red.path, WorktreeColor.RED)
-            view.setColor(blue.path, WorktreeColor.BLUE)
-            view.setPalette(listOf(WorktreeColor.BLUE, WorktreeColor.RED), mapOf(WorktreeColor.BLUE to "Reviews", WorktreeColor.RED to " "))
+            view.setColor(red.path, WorktreeColor.default("RED"))
+            view.setColor(blue.path, WorktreeColor.default("BLUE"))
+            view.setPalette(listOf(WorktreeColor.default("BLUE").copy(name = "Reviews"), WorktreeColor.default("RED"), custom))
+            view.setColor(mine.path, custom)
             view.grouping = WorktreeGrouping.COLOR
         }
         try {
-            assertEquals(WorktreeColor.entries.size, view.palette.size)
-            assertEquals(listOf(WorktreeColor.BLUE, WorktreeColor.RED, WorktreeColor.ORANGE), view.palette.take(3))
+            assertEquals(listOf("BLUE", "RED", custom.id), view.palette.map { it.id })
+            assertEquals("Reviews", view.color(blue.path)!!.name)
             val controller = WorktreeController(service, project.basePath!!, coroutines.scope)
             val panel = edt { AgentManagerPanel(testRootDisposable, controller, project) }
             edt { controller.reload() }
             flush()
+            assertEquals(listOf("Reviews", WorktreeColor.default("RED").name, "Hotfixes"), groups(panel))
 
-            val groups = edt {
-                val tree = tree(panel)
-                (0 until tree.rowCount).mapNotNull { tree.getPathForRow(it)?.lastPathComponent as? ActiveEntry }
-                    .filter { it.allowsChildren }.map { it.item.title }
-            }
-            assertEquals(listOf("Reviews", WorktreeColor.RED.label), groups)
+            // Removing a color takes it off the worktrees that wore it.
+            edt { view.setPalette(listOf(WorktreeColor.default("BLUE").copy(name = "Reviews"), custom)) }
+            flush()
+            assertNull(view.color(red.path))
+            waitUntil { groups(panel) == listOf("Reviews", "Hotfixes", KiloBundle.message("worktree.color.none")) }
         } finally {
             edt {
-                view.setColor(red.path, null)
-                view.setColor(blue.path, null)
-                view.setPalette(WorktreeColor.entries, emptyMap())
+                listOf(red, blue, mine).forEach { view.setColor(it.path, null) }
+                view.resetPalette()
                 view.grouping = WorktreeGrouping.NONE
             }
         }
+        assertEquals(WorktreeColor.DEFAULTS, view.palette)
+    }
+
+    private fun groups(panel: AgentManagerPanel): List<String> = edt {
+        val tree = tree(panel)
+        (0 until tree.rowCount).mapNotNull { tree.getPathForRow(it)?.lastPathComponent as? ActiveEntry }
+            .filter { it.allowsChildren }.map { it.item.title }
     }
 
     fun `test worktree row uses the error icon for error activity`() {

@@ -13,28 +13,49 @@ import com.intellij.ui.JBColor
 import java.awt.Color
 import java.util.concurrent.CopyOnWriteArrayList
 
-/** Colors a worktree row can wear in Agent Manager. Translucent so the row text stays readable in any theme. */
-enum class WorktreeColor(private val rgb: Int) {
-    RED(0xE5534B),
-    ORANGE(0xE8853A),
-    YELLOW(0xD9B428),
-    GREEN(0x4FAF5B),
-    TEAL(0x2BA3A3),
-    BLUE(0x4A8FE7),
-    PURPLE(0x9B6FE0),
-    PINK(0xD8609E),
-    GRAY(0x8C8C8C);
-
+/**
+ * A color a worktree row can wear in Agent Manager. The palette is the user's own: these start as the
+ * [DEFAULTS] and can be renamed, recolored, reordered, removed and added to. [id] is what a worktree stores,
+ * so renaming or recoloring a color keeps every worktree that wears it.
+ */
+data class WorktreeColor(val id: String, val name: String, val rgb: Int) {
+    /** Translucent, so the row text stays readable in any theme. */
     val fill: Color
         get() {
-            val base = Color(rgb)
+            val base = Color(rgb and 0xFFFFFF)
             return JBColor(Color(base.red, base.green, base.blue, 46), Color(base.red, base.green, base.blue, 64))
         }
 
-    val swatch: Color get() = Color(rgb)
+    val swatch: Color get() = Color(rgb and 0xFFFFFF)
 
-    /** The built-in name; a project can rename it, see [WorktreeListView.label]. */
-    val label: String get() = KiloBundle.message("worktree.color.${name.lowercase()}")
+    val label: String get() = name
+
+    /** One stored palette entry: `id|RRGGBB|name`. */
+    internal fun encode(): String = "$id|${"%06X".format(rgb and 0xFFFFFF)}|$name"
+
+    companion object {
+        private val BUILTIN = listOf(
+            "RED" to 0xE5534B, "ORANGE" to 0xE8853A, "YELLOW" to 0xD9B428, "GREEN" to 0x4FAF5B, "TEAL" to 0x2BA3A3,
+            "BLUE" to 0x4A8FE7, "PURPLE" to 0x9B6FE0, "PINK" to 0xD8609E, "GRAY" to 0x8C8C8C,
+        )
+
+        /** The palette a project starts with. */
+        val DEFAULTS: List<WorktreeColor>
+            get() = BUILTIN.map { (id, rgb) -> WorktreeColor(id, KiloBundle.message("worktree.color.${id.lowercase()}"), rgb) }
+
+        fun default(id: String): WorktreeColor = DEFAULTS.first { it.id == id }
+
+        /** A new color with a fresh id. */
+        fun create(name: String, rgb: Int): WorktreeColor =
+            WorktreeColor("c" + java.util.UUID.randomUUID().toString().replace("-", "").take(10), name, rgb and 0xFFFFFF)
+
+        internal fun decode(raw: String): WorktreeColor? {
+            val parts = raw.split('|', limit = 3)
+            if (parts.size < 3 || parts[0].isBlank()) return null
+            val rgb = parts[1].toIntOrNull(16) ?: return null
+            return WorktreeColor(parts[0], parts[2], rgb)
+        }
+    }
 }
 
 /** How Agent Manager orders worktrees. [MANUAL] is the drag-and-drop order. */
@@ -68,8 +89,12 @@ internal fun branchPrefix(branch: String): String? = branch.substringBefore('/',
 class WorktreeListView(private val project: Project) : PersistentStateComponent<WorktreeListView.Data> {
     class Data {
         var colors: MutableMap<String, String> = mutableMapOf()
+        /** Earlier releases kept only names and an order for the fixed colors; read once to build [palette]. */
         var names: MutableMap<String, String> = mutableMapOf()
         var order: MutableList<String> = mutableListOf()
+        /** The user's palette as `id|RRGGBB|name` entries, once they have edited it. */
+        var palette: MutableList<String> = mutableListOf()
+        var customized: Boolean = false
     }
 
     private var data = Data()
@@ -81,30 +106,39 @@ class WorktreeListView(private val project: Project) : PersistentStateComponent<
         data = state
     }
 
-    fun color(path: String): WorktreeColor? =
-        data.colors[key(path)]?.let { name -> WorktreeColor.entries.firstOrNull { it.name == name } }
+    fun color(path: String): WorktreeColor? = data.colors[key(path)]?.let { id -> palette.firstOrNull { it.id == id } }
 
     fun setColor(path: String, color: WorktreeColor?) {
-        if (color == null) data.colors.remove(key(path)) else data.colors[key(path)] = color.name
+        if (color == null) data.colors.remove(key(path)) else data.colors[key(path)] = color.id
         changed()
     }
 
-    /** The colors in the user's order; colors missing from a saved order keep their built-in place at the end. */
+    /** The colors in the user's order, with their names and shades. */
     val palette: List<WorktreeColor>
         get() {
-            val saved = data.order.mapNotNull { n -> WorktreeColor.entries.firstOrNull { it.name == n } }.distinct()
-            return saved + WorktreeColor.entries.filter { it !in saved }
+            if (data.customized) return data.palette.mapNotNull(WorktreeColor::decode).distinctBy { it.id }
+            val defaults = WorktreeColor.DEFAULTS
+            val saved = data.order.mapNotNull { id -> defaults.firstOrNull { it.id == id } }.distinct()
+            return (saved + defaults.filter { it !in saved }).map { c ->
+                data.names[c.id]?.takeIf { it.isNotBlank() }?.let { c.copy(name = it) } ?: c
+            }
         }
 
-    /** The user's name for [color], or its built-in name. */
-    fun label(color: WorktreeColor): String = data.names[color.name]?.takeIf { it.isNotBlank() } ?: color.label
+    /** Replaces the palette. A worktree wearing a color that is no longer in it shows no color. */
+    fun setPalette(colors: List<WorktreeColor>) {
+        data.palette = colors.map { c -> c.copy(name = c.name.trim().ifEmpty { c.name }).encode() }.toMutableList()
+        data.customized = true
+        val ids = colors.map { it.id }.toSet()
+        data.colors.values.removeIf { it !in ids }
+        changed()
+    }
 
-    /** Saves the color order and names in one go; a blank or unchanged name falls back to the built-in one. */
-    fun setPalette(order: List<WorktreeColor>, names: Map<WorktreeColor, String>) {
-        data.order = order.map { it.name }.toMutableList()
-        data.names = names.mapNotNull { (color, name) ->
-            name.trim().takeIf { it.isNotEmpty() && it != color.label }?.let { color.name to it }
-        }.toMap().toMutableMap()
+    /** Back to the built-in palette. */
+    fun resetPalette() {
+        data.palette = mutableListOf()
+        data.names = mutableMapOf()
+        data.order = mutableListOf()
+        data.customized = false
         changed()
     }
 

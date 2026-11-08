@@ -22,4 +22,13 @@ class WorktreeListViewTest {
         assertNull(branchPrefix("feature-events"))
         assertNull(branchPrefix("/odd"))
     }
+
+    @Test
+    fun `palette entries survive a round trip and bad ones are skipped`() {
+        val color = WorktreeColor("c1", "Ops | infra", 0xABCDEF)
+        assertEquals("c1|ABCDEF|Ops | infra", color.encode())
+        assertEquals(color, WorktreeColor.decode(color.encode()))
+        assertNull(WorktreeColor.decode("broken"))
+        assertNull(WorktreeColor.decode("c2|zz|name"))
+    }
 }
