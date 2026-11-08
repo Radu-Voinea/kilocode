@@ -28,7 +28,20 @@ internal fun setGithubIntegration(enabled: Boolean, surface: String) {
     if (KiloPluginSettings.getGithub() == enabled) return
     KiloPluginSettings.setGithub(enabled)
     Telemetry.send("Github Integration Toggled", mapOf("enabled" to enabled.toString(), "surface" to surface))
+    publishForge()
+}
+
+/** Single write path for the GitLab integration toggle; listeners hear whether any forge integration is on. */
+@RequiresEdt
+internal fun setGitlabIntegration(enabled: Boolean) {
+    if (KiloPluginSettings.getGitlab() == enabled) return
+    KiloPluginSettings.setGitlab(enabled)
+    publishForge()
+}
+
+/** Listeners poll for PR/MR state while either the GitHub or the GitLab integration is on. */
+private fun publishForge() {
     ApplicationManager.getApplication().messageBus
         .syncPublisher(GithubIntegrationListener.TOPIC)
-        .changed(enabled)
+        .changed(KiloPluginSettings.getForge())
 }

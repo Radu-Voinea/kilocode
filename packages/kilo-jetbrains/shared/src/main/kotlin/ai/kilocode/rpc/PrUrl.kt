@@ -12,6 +12,9 @@ private const val HOST = "(?:^|//|@)(?:[\\w-]+\\.)*github\\.com(?::\\d+)?[/:]"
 private val PR_URL = Regex("$HOST([^/]+)/([^/]+?)(?:\\.git)?/pull/(\\d+)")
 private val REPO_URL = Regex("$HOST([^/]+)/([^/]+?)(?:\\.git)?/*$")
 
+/** Whether [url] is a GitLab merge request URL (`https://<host>/<group>/<repo>/-/merge_requests/<n>`). */
+fun isMergeRequestUrl(url: String): Boolean = Regex("^https?://[^/]+/.+?/-/merge_requests/\\d+(?:[/?#].*)?$").matches(url.trim())
+
 /** Parses `https://github.com/<owner>/<repo>/pull/<n>` (and ssh-style hosts) into its parts. */
 fun parsePrUrl(url: String): PrRef? {
     val match = PR_URL.find(url.trim()) ?: return null

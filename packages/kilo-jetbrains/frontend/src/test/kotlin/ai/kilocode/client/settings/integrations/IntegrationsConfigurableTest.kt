@@ -19,6 +19,7 @@ class IntegrationsConfigurableTest : BasePlatformTestCase() {
     override fun tearDown() {
         try {
             KiloPluginSettings.unsetGithub()
+            KiloPluginSettings.setGitlab(false)
         } finally {
             super.tearDown()
         }
@@ -102,11 +103,32 @@ class IntegrationsConfigurableTest : BasePlatformTestCase() {
         }
     }
 
+    fun `test gitlab toggle is off by default and turning it on keeps polling on without github`() {
+        val events = mutableListOf<Boolean>()
+        ApplicationManager.getApplication().messageBus.connect(testRootDisposable)
+            .subscribe(GithubIntegrationListener.TOPIC, GithubIntegrationListener { events += it })
+        val cfg = IntegrationsConfigurable()
+        edt {
+            val panel = cfg.createComponent() as Container
+            assertTrue(text(panel).contains("Enable GitLab Integration"))
+            val lab = buttons(panel)[1]
+            assertFalse(lab.isSelected)
+            lab.doClick()
+            assertTrue(KiloPluginSettings.getGitlab())
+            toggle(panel).doClick()
+            assertFalse(KiloPluginSettings.getGithub())
+            assertTrue("GitLab alone keeps PR/MR polling on", KiloPluginSettings.getForge())
+            assertEquals(listOf(true, true), events)
+            cfg.disposeUIResources()
+        }
+    }
+
     // -- helpers --
 
     private fun <T> edt(block: () -> T): T = edtWait(block)
 
-    private fun toggle(root: Container): OnOffButton = buttons(root).single()
+    /** The GitHub toggle, which is the first on the page. */
+    private fun toggle(root: Container): OnOffButton = buttons(root).first()
 
     private fun buttons(root: Container): List<OnOffButton> = buildList {
         for (comp in root.components) {

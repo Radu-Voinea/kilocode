@@ -68,7 +68,7 @@ class WorktreeStatusService internal constructor(
     private var kinds = emptyMap<String, SessionActivityKind>()
     private var refs = 0
     private var lastPr = 0L
-    private var github = KiloPluginSettings.getGithub()
+    private var github = KiloPluginSettings.getForge()
     private val away = Away { timers.now() }
     // Bumped whenever a PR lookup starts or is abandoned, so a result that arrives after its reason
     // to exist is gone cannot publish. Mirrors GhStatusCoordinator's probe generation.

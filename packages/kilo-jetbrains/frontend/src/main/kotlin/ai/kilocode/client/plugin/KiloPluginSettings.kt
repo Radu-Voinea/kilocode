@@ -11,6 +11,8 @@ object KiloPluginSettings {
     private const val SHOW_APPROVAL_REASON_KEY = "kilo.session.showApprovalReason"
     private const val PERMISSION_RULES_EXPANDED_KEY = "kilo.session.permissionRulesExpanded"
     private const val GITHUB_KEY = "kilo.integrations.github"
+    private const val GITLAB_KEY = "kilo.integrations.gitlab"
+    private const val GITLAB_HOSTS_KEY = "kilo.integrations.gitlab.hosts"
     private const val AGENT_KEY = "kilo.session.agent"
     private const val REASONING_DISPLAY_KEY = "kilo.session.reasoningDisplay"
     private const val TERMINAL_COMMAND_DISPLAY_KEY = "kilo.session.terminalCommandDisplay"
@@ -87,6 +89,22 @@ object KiloPluginSettings {
     internal fun unsetGithub() {
         PropertiesComponent.getInstance().unsetValue(GITHUB_KEY)
     }
+
+    /** GitLab merge requests through `glab`. The backend reads the same keys to pick the CLI per repository. */
+    fun getGitlab(): Boolean = PropertiesComponent.getInstance().getBoolean(GITLAB_KEY, false)
+
+    fun setGitlab(value: Boolean) {
+        PropertiesComponent.getInstance().setValue(GITLAB_KEY, value.toString())
+    }
+
+    fun getGitlabHosts(): String = PropertiesComponent.getInstance().getValue(GITLAB_HOSTS_KEY, "")
+
+    fun setGitlabHosts(value: String) {
+        PropertiesComponent.getInstance().setValue(GITLAB_HOSTS_KEY, value.trim(), "")
+    }
+
+    /** Whether any code host integration is on, which is what decides if Kilo polls for PR/MR state at all. */
+    fun getForge(): Boolean = getGithub() || getGitlab()
 
     fun getReasoningDisplay(): ReasoningDisplay {
         val raw = PropertiesComponent.getInstance().getValue(REASONING_DISPLAY_KEY)

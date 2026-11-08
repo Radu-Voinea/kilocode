@@ -114,6 +114,7 @@ class KiloWorktreeRpcApiImpl(
         // short enough to notice the reset without waiting out a poll interval.
         private const val GH_LIMIT_TTL = 60_000L
         private const val PR_TTL = 90_000L
+        private const val FORGE_TTL = 60_000L
         // A timed-out fan-out established nothing about these pull requests, so it must not be served
         // as an answer for a full [PR_TTL] — doing that republished one `gh` overrun as a fresh verdict
         // for up to a minute and a half after `gh` was demonstrably healthy again, which is what made
@@ -145,6 +146,8 @@ class KiloWorktreeRpcApiImpl(
     private val prs = ConcurrentHashMap<String, Timed<WorktreePrListDto>>()
     private val branches = ConcurrentHashMap<String, Timed<BranchStatusDto>>()
     private val resolver = PrResolver(gh = { dir, args, ms -> runGh(dir, args, ms) }, git = ::runGit)
+    private val gitlab = GitlabResolver { dir, args, ms -> runCli("glab", dir, args, ms) }
+    private val forges = ConcurrentHashMap<String, Timed<String?>>()
     private val ghLock = Any()
     // Serializes the git-mutating operations (create/import/remove/rename/adopt/reorder/session-list)
     // for one repository, keyed by its main worktree's real path, so concurrent calls cannot interleave
@@ -486,7 +489,54 @@ class KiloWorktreeRpcApiImpl(
     }
 
     override suspend fun ghStatus(directory: String, github: Boolean, maxAge: Long?): GhAvailability = withContext(Dispatchers.IO) {
-        probeGh(Path.of(directory).normalize(), "rpc", github, maxAge)
+        val root = Path.of(directory).normalize()
+        // The frontend's flag means "some forge integration is on"; which CLI that is depends on the remote.
+        val forge = if (github) forge(root) else null
+        if (forge == Forge.GITLAB) return@withContext probeGh(root, "rpc", false, maxAge).takeIf { it != GhAvailability.OK } ?: glabStatus(root)
+        probeGh(root, "rpc", forge == Forge.GITHUB, maxAge)
+    }
+
+    /**
+     * The forge serving the repository at [root], from its `origin` remote and the integration toggles.
+     * The remote is cached briefly: this runs on every poll and a remote URL almost never changes.
+     */
+    private fun forge(root: Path): Forge? {
+        val now = System.currentTimeMillis()
+        val key = root.toString()
+        val origin = forges[key]?.takeIf { now - it.time < FORGE_TTL }?.value ?: run {
+            val remote = runGit(root, "remote", "get-url", "origin")
+            val value = if (remote.ok) remote.stdout.trim() else null
+            forges[key] = Timed(now, value)
+            value
+        }
+        return forgeFor(origin, ForgeSettings.github(), ForgeSettings.gitlab(), ForgeSettings.hosts())
+    }
+
+    /**
+     * Whether `glab` can answer for [root]. Problems are logged rather than reported: the availability
+     * banners speak about the GitHub CLI, so a GitLab repository shows no badges instead of a wrong banner.
+     */
+    private fun glabStatus(root: Path): GhAvailability {
+        val out = runCli("glab", root, listOf("auth", "status"), GH_PROBE_TIMEOUT_MS)
+        if (out.ok) return GhAvailability.OK
+        val verdict = classifyGlabError(out)
+        LOG.info("glab probe dir=$root verdict=$verdict exit=${out.exit} stderr=${snippet(out.stderr)}")
+        return GhAvailability.OK
+    }
+
+    /** Merge requests for every worktree of a GitLab repository. */
+    private suspend fun gitlabPrs(directory: String, root: Path): WorktreePrListDto {
+        val all = sync(root) ?: return WorktreePrListDto()
+        val data = parallel(prTargets(all)) { item ->
+            runCatching { gitlab.resolve(item.path, item.branch) }.getOrElse { err ->
+                if (err is CancellationException) throw err
+                LOG.warn("worktree poll failed: op=mr path=${item.path} message=${err.message}", err)
+                null
+            }
+        }.filterNotNull()
+        val dto = WorktreePrListDto(GhAvailability.OK, data)
+        prs[directory] = Timed(System.currentTimeMillis(), dto)
+        return dto
     }
 
     override suspend fun prStatus(directory: String, maxAge: Long?, fresh: List<String>): WorktreePrListDto = withContext(Dispatchers.IO) {
@@ -505,6 +555,11 @@ class KiloWorktreeRpcApiImpl(
         if (!Files.isDirectory(root)) {
             LOG.info("pr status skipped, directory does not exist: $root")
             return@withContext WorktreePrListDto()
+        }
+        when (forge(root)) {
+            Forge.GITLAB -> return@withContext gitlabPrs(directory, root)
+            null -> return@withContext WorktreePrListDto().also { prs[directory] = Timed(now, it) }
+            Forge.GITHUB -> Unit
         }
         // A caller that rejected the cached PR list would not accept a cached availability verdict
         // from the same moment either, so the ceiling carries into the gh probe.
@@ -555,8 +610,15 @@ class KiloWorktreeRpcApiImpl(
         }
         val branch = runGit(root, "branch", "--show-current").stdout.trim()
         val worktree = isLinkedWorktree(root)
-        val availability = ghAvailable(root, github, maxAge)
-        val lookup = if (github && availability == GhAvailability.OK && branch.isNotBlank()) {
+        val forge = if (github) forge(root) else null
+        if (forge == Forge.GITLAB) {
+            val pr = if (branch.isNotBlank()) gitlab.resolve(directory, branch) else null
+            val dto = BranchStatusDto(branch = branch, worktree = worktree, availability = GhAvailability.OK, pr = pr)
+            branches[key] = Timed(System.currentTimeMillis(), dto)
+            return@withContext dto
+        }
+        val availability = ghAvailable(root, forge == Forge.GITHUB, maxAge)
+        val lookup = if (forge == Forge.GITHUB && availability == GhAvailability.OK && branch.isNotBlank()) {
             resolver.resolve(directory, branch, baseBranch(root), maxAge)
         } else {
             PrLookup()
@@ -764,7 +826,10 @@ class KiloWorktreeRpcApiImpl(
     override suspend fun importPr(directory: String, url: String): CreateWorktreeResultDto =
         withContext(Dispatchers.IO) {
             val base = Path.of(directory).normalize()
-            val ref = parsePrUrl(url) ?: return@withContext CreateWorktreeResultDto(error = "Enter a valid GitHub pull request URL")
+            parseMrUrl(url)?.let { mr -> return@withContext importMr(base, url, mr) }
+            val ref = parsePrUrl(url) ?: return@withContext CreateWorktreeResultDto(
+                error = "Enter a valid GitHub pull request or GitLab merge request URL",
+            )
             // `gh pr view` resolves against the URL's own repo, but every fetch below targets this
             // checkout's local `origin` — so a foreign PR URL either fails obscurely or, if the local
             // origin happens to have a PR sharing that number, silently imports the wrong PR. Catch it
@@ -1374,6 +1439,61 @@ class KiloWorktreeRpcApiImpl(
     private fun runGit(base: Path, args: List<String>, timeoutMs: Int = GIT_COMMAND_TIMEOUT_MS): CmdOut =
         runGitCommand(base, args, timeoutMs)
 
+    /**
+     * Imports a GitLab merge request into a worktree, like [importPr] does for a GitHub pull request:
+     * the source branch when it lives in this project, `refs/merge-requests/<iid>/head` for a fork.
+     */
+    private suspend fun importMr(base: Path, url: String, ref: MrRef): CreateWorktreeResultDto {
+        if (!ForgeSettings.gitlab()) {
+            return CreateWorktreeResultDto(error = "Turn on the GitLab integration in Settings | Tools | Kilo Code | Integrations to import merge requests")
+        }
+        val remote = runGit(base, "remote", "get-url", "origin")
+        val origin = if (remote.ok) remote.stdout.trim() else null
+        val project = origin?.let(::remoteProject)
+        val host = origin?.let(::remoteHost)
+        if (project != null && host != null && (!project.equals(ref.project, ignoreCase = true) || host != ref.host)) {
+            LOG.warn("mr import rejected: url=$url mr=${ref.host}/${ref.project} origin=$host/$project")
+            return CreateWorktreeResultDto(
+                error = "This merge request belongs to ${ref.host}/${ref.project}, but this project's origin is $host/$project.",
+            )
+        }
+        return lock(base, "import") {
+            val view = runCli("glab", base, listOf("mr", "view", ref.iid.toString(), "-F", "json"), GH_READ_TIMEOUT_MS)
+            if (!view.ok) {
+                LOG.warn("mr import view failed: url=$url exit=${view.exit} stderr=${view.stderr.trim()}")
+                val error = when (classifyGlabError(view)) {
+                    GhAvailability.MISSING -> "GitLab CLI (glab) is not installed"
+                    GhAvailability.UNAUTH -> "GitLab CLI (glab) is not authorized. Run glab auth login"
+                    GhAvailability.TIMEOUT -> "GitLab CLI (glab) did not respond in time. Try again."
+                    else -> view.stderr.ifBlank { "glab mr view failed" }
+                }
+                return@lock CreateWorktreeResultDto(error = error)
+            }
+            val head = parseMrHead(view.stdout)
+            val branch = prBranchName(head, ref.iid)
+            val failure = fetchMrBranch({ args -> runGit(base, args, GIT_WRITE_TIMEOUT_MS) }, ref.iid, head, branch)
+            if (failure != null) {
+                LOG.warn("mr import fetch failed: url=$url exit=${failure.exit} stderr=${failure.stderr.trim()} timeout=${failure.timeout}")
+                return@lock CreateWorktreeResultDto(error = fetchReason(failure, branch))
+            }
+            addWorktree(base, branch, existing = true, baseRef = null)
+        }
+    }
+
+    /** Runs a forge CLI ([name] is `gh` or `glab`) in [base]. */
+    private fun runCli(name: String, base: Path, args: List<String>, timeoutMs: Int): CmdOut {
+        return try {
+            val cmd = GeneralCommandLine(listOf(name) + args)
+                .withWorkDirectory(base.toFile())
+                .withParentEnvironmentType(ParentEnvironmentType.CONSOLE)
+            val out = CapturingProcessHandler(cmd).runProcess(timeoutMs)
+            if (out.isTimeout) LOG.warn("$name command timed out: dir=$base args=${args.joinToString(" ")} ms=$timeoutMs")
+            CmdOut(if (out.isTimeout) -1 else out.exitCode, out.stdout, out.stderr, out.isTimeout)
+        } catch (e: Exception) {
+            CmdOut(-1, "", e.message ?: "$name failed")
+        }
+    }
+
     private fun runGh(base: Path, vararg args: String): CmdOut = runGh(base, args.toList())
 
     private fun runGh(base: Path, args: List<String>, timeoutMs: Int = GH_READ_TIMEOUT_MS): CmdOut {
@@ -1888,6 +2008,30 @@ internal fun fetchPrBranch(run: (List<String>) -> CmdOut, number: Int, head: PrH
     val point = run(listOf("branch", "--force", branch, tracking))
     if (!point.ok) return point
     recordPrBranch(run, branch, if (direct.ok) "refs/heads/${head.ref}" else pull)
+    return null
+}
+
+/**
+ * Fetches a merge request's head into [branch]. A same-project source branch gets an ordinary upstream;
+ * a fork's is reached through `refs/merge-requests/<iid>/head`, which GitLab keeps on the target project.
+ */
+internal fun fetchMrBranch(run: (List<String>) -> CmdOut, iid: Int, head: PrHead, branch: String): CmdOut? {
+    val mr = "refs/merge-requests/$iid/head"
+    if (head.cross || head.ref.isBlank()) {
+        val result = run(listOf("fetch", "origin", "+$mr:$branch"))
+        if (!result.ok) return result
+        recordPrBranch(run, branch, mr)
+        return null
+    }
+    val tracking = "refs/remotes/origin/${head.ref}"
+    val direct = run(listOf("fetch", "origin", "+refs/heads/${head.ref}:$tracking"))
+    if (!direct.ok) {
+        val fallback = run(listOf("fetch", "origin", "+$mr:$tracking"))
+        if (!fallback.ok) return fallback
+    }
+    val point = run(listOf("branch", "--force", branch, tracking))
+    if (!point.ok) return point
+    recordPrBranch(run, branch, if (direct.ok) "refs/heads/${head.ref}" else mr)
     return null
 }
 

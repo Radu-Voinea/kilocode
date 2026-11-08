@@ -88,7 +88,7 @@ class GhStatusCoordinator(
     private var busy = false
     private var failures = 0
     private var generation = 0
-    private var github = KiloPluginSettings.getGithub()
+    private var github = KiloPluginSettings.getForge()
     private var job: Job? = null
     /** When the last probe finished, whatever its outcome. See [EVENT_THROTTLE]. */
     private var probed = 0L

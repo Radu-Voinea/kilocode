@@ -27,6 +27,7 @@ import ai.kilocode.rpc.dto.KiloAppStatusDto
 import ai.kilocode.rpc.dto.ModelSelectionDto
 import ai.kilocode.rpc.dto.ModelsWorkspaceDto
 import ai.kilocode.rpc.foreignPr
+import ai.kilocode.rpc.isMergeRequestUrl
 import ai.kilocode.rpc.parsePrUrl
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
@@ -205,7 +206,7 @@ internal class NewWorktreeDialog(
         val fresh = TabInfo(newContent()).setText(KiloBundle.message("worktree.dialog.tab.new"))
         // Importing a PR needs gh, which is exactly what the GitHub integration setting turns off,
         // so the tab is omitted rather than offered as a guaranteed failure.
-        val pr = if (KiloPluginSettings.getGithub()) TabInfo(prContent()).setText(KiloBundle.message("worktree.dialog.tab.pr")) else null
+        val pr = if (KiloPluginSettings.getForge()) TabInfo(prContent()).setText(KiloBundle.message("worktree.dialog.tab.pr")) else null
         val local = TabInfo(branchContent()).setText(KiloBundle.message("worktree.dialog.tab.branch"))
         val tabs: JBTabs = JBTabsFactory.createTabs(project, disposable).apply {
             presentation.setSingleRow(true)
@@ -390,6 +391,12 @@ internal class NewWorktreeDialog(
         if (value.isEmpty()) {
             setErrorText(KiloBundle.message("worktree.import.pr.required"), url)
             url.requestFocusInWindow()
+            return
+        }
+        // GitLab merge requests are checked against the origin by the backend, which knows the host.
+        if (KiloPluginSettings.getGitlab() && isMergeRequestUrl(value)) {
+            plan = NewWorktreePlan.Pr(value)
+            close(OK_EXIT_CODE)
             return
         }
         val ref = parsePrUrl(value)

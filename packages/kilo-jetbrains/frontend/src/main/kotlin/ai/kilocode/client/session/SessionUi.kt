@@ -1486,7 +1486,7 @@ class SessionUi(
     private fun refreshBranch() {
         if (readonly || hosted) return
         branchJob?.cancel()
-        val github = KiloPluginSettings.getGithub()
+        val github = KiloPluginSettings.getForge()
         branchJob = cs.launch {
             val status = runCatching { service<KiloWorktreeService>().branchStatus(workspace.directory, github) }
                 .getOrElse {
