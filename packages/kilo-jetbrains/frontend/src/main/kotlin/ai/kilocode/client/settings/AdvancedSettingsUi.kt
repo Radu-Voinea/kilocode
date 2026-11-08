@@ -4,17 +4,26 @@ import ai.kilocode.client.agentManager.worktree.WorktreeDiagnosticsAction
 import ai.kilocode.client.plugin.KiloBundle
 import ai.kilocode.client.settings.base.SettingsRow
 import ai.kilocode.client.settings.base.SettingsRows
+import ai.kilocode.client.settings.base.SettingsStackedRow
 import ai.kilocode.client.settings.base.SettingsToggle
 import ai.kilocode.client.ui.UiStyle
 import ai.kilocode.log.LogConfig
+import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
 import com.intellij.openapi.ui.ComboBox
+import com.intellij.openapi.ui.TextFieldWithBrowseButton
 import com.intellij.platform.ide.productMode.IdeProductMode
 import com.intellij.ui.TitledSeparator
 import com.intellij.ui.components.ActionLink
+import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.concurrency.annotations.RequiresEdt
 import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
+import java.awt.Dimension
+import java.awt.Rectangle
+import javax.swing.JComponent
+import javax.swing.ScrollPaneConstants
+import javax.swing.Scrollable
 import javax.swing.DefaultComboBoxModel
 import javax.swing.JPanel
 
@@ -35,8 +44,14 @@ internal class AdvancedSettingsUi : JPanel(BorderLayout()) {
     private var touched = false
     private val indexWorktrees = SettingsToggle { touched = true }
     private var locationTouched = false
-    private val worktreeLocation = JBTextField().apply {
-        columns = 24
+    private val locationPicker = TextFieldWithBrowseButton().apply {
+        addBrowseFolderListener(
+            null,
+            FileChooserDescriptorFactory.createSingleFolderDescriptor()
+                .withTitle(KiloBundle.message("settings.advanced.worktreeLocation.title")),
+        )
+    }
+    private val worktreeLocation: JBTextField = (locationPicker.textField as JBTextField).apply {
         emptyText.text = WORKTREE_LOCATION_DEFAULT
         document.addDocumentListener(object : com.intellij.ui.DocumentAdapter() {
             override fun textChanged(e: javax.swing.event.DocumentEvent) {
@@ -76,13 +91,19 @@ internal class AdvancedSettingsUi : JPanel(BorderLayout()) {
                 indexWorktrees,
             ))
             row(TitledSeparator(KiloBundle.message("settings.advanced.worktrees.title")))
-            row(SettingsRow(
+            // Stacked so the path field gets the full width instead of squeezing beside a long description.
+            row(SettingsStackedRow(
                 KiloBundle.message("settings.advanced.worktreeLocation.title"),
                 KiloBundle.message("settings.advanced.worktreeLocation.description"),
-                worktreeLocation,
+                locationPicker,
             ))
         }
-        add(rows, BorderLayout.CENTER)
+        // The configurable is NoScroll, so the page scrolls itself; without this the rows below the
+        // dialog's height (the worktree location) were cut off and unreachable.
+        add(JBScrollPane(ScrollableRows(rows)).apply {
+            border = null
+            horizontalScrollBarPolicy = ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
+        }, BorderLayout.CENTER)
     }
 
     fun modified(): Boolean {
@@ -190,6 +211,20 @@ internal class AdvancedSettingsUi : JPanel(BorderLayout()) {
             ),
         )
     }
+}
+
+/** Fills the viewport's width and scrolls vertically. */
+private class ScrollableRows(rows: JComponent) : JPanel(BorderLayout()), Scrollable {
+    init {
+        isOpaque = false
+        add(rows, BorderLayout.CENTER)
+    }
+
+    override fun getScrollableTracksViewportWidth() = true
+    override fun getScrollableTracksViewportHeight() = false
+    override fun getPreferredScrollableViewportSize(): Dimension = preferredSize
+    override fun getScrollableUnitIncrement(visible: Rectangle, orientation: Int, direction: Int) = UiStyle.Gap.pad()
+    override fun getScrollableBlockIncrement(visible: Rectangle, orientation: Int, direction: Int) = visible.height
 }
 
 private const val WORKTREE_LOCATION_DEFAULT = ".kilo/worktrees"
