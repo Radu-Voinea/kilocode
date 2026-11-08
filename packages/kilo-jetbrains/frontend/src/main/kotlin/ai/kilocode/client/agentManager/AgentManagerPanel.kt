@@ -15,6 +15,13 @@ import ai.kilocode.client.agentManager.worktree.WorktreeBaseUpdatePrompts
 import ai.kilocode.client.agentManager.worktree.WorktreeController
 import ai.kilocode.client.agentManager.worktree.WorktreeDataKeys
 import ai.kilocode.client.agentManager.worktree.WorktreeIcons
+import ai.kilocode.client.agentManager.worktree.WorktreeColor
+import ai.kilocode.client.agentManager.worktree.WorktreeGrouping
+import ai.kilocode.client.agentManager.worktree.WorktreeListView
+import ai.kilocode.client.agentManager.worktree.WorktreeSort
+import ai.kilocode.client.agentManager.worktree.WorktreeState
+import ai.kilocode.client.agentManager.worktree.branchPrefix
+import ai.kilocode.client.agentManager.worktree.worktreeState
 import ai.kilocode.client.agentManager.worktree.WorktreeRunBinding
 import ai.kilocode.client.agentManager.worktree.WorktreeStatusBinding
 import ai.kilocode.client.agentManager.worktree.WorktreeStatusService
@@ -182,7 +189,7 @@ class AgentManagerPanel(
             }),
         ),
         reorder = ActiveReorder(
-            movable = { row -> row is WorktreeRow && !row.current && row.progress == null },
+            movable = { row -> row is WorktreeRow && !row.current && row.progress == null && view?.manual != false },
             onMove = { move -> controller.reorder(move.keys) },
         ),
     )
@@ -197,6 +204,12 @@ class AgentManagerPanel(
     private var activity = emptyMap<String, SessionActivityKind>()
     private var observed = emptySet<String>()
     private var hovered: String? = null
+    private val view: WorktreeListView? = project?.service<WorktreeListView>()
+
+    // Worktrees whose sessions stopped running while the user was elsewhere, by worktree id. Cleared
+    // when the worktree is opened or its tab selected, or when its sessions start again.
+    private val finished = mutableSetOf<String>()
+    private val lastKind = mutableMapOf<String, SessionActivityKind?>()
     private var orphanBanner: OrphanBanner? = null
 
     init {
@@ -254,6 +267,7 @@ class AgentManagerPanel(
             sync()
             project?.service<WorktreeStatusService>()?.refreshStats()
         }
+        view?.addListener { edt({ !Disposer.isDisposed(this) }) { sync() } }?.let { off -> Disposer.register(this) { off() } }
         bindStatus()
         bindActivity()
         bindEditorSelection()
@@ -350,6 +364,7 @@ class AgentManagerPanel(
     private fun open(item: WorktreeDto, focus: Boolean) {
         val target = project ?: return
         if (controller.progress(item.id) != null) return
+        if (finished.remove(item.id)) sync()
         openWorktreeSession(target, item, focus)
     }
 
@@ -389,6 +404,14 @@ class AgentManagerPanel(
     }
 
     /** Lets the user pick a folder and lists it when it is a worktree of this repository. */
+    internal fun worktreeColor(item: WorktreeDto?): WorktreeColor? = item?.let { view?.color(it.path) }
+
+    internal fun canColor(item: WorktreeDto?): Boolean = item != null && view != null
+
+    internal fun setWorktreeColor(item: WorktreeDto, color: WorktreeColor?) {
+        view?.setColor(item.path, color)
+    }
+
     internal fun addExisting() {
         val target = project ?: return
         val descriptor = com.intellij.openapi.fileChooser.FileChooserDescriptorFactory.createSingleFolderDescriptor()
@@ -647,19 +670,24 @@ class AgentManagerPanel(
                 running = running.contains(normalizeWorktreePath(item.path)),
             )
         }
+        val viewing = currentEditorWorktree()
         val local = (0 until controller.model.size).map {
             val item = controller.model.getElementAt(it)
             val key = normalizeWorktreePath(item.path)
             val pull = prs[key]
             service<WorktreeNameCache>().putPr(item.path, pull)
+            val kind = controller.kind(item.path)
+            trackFinished(item.id, kind, viewing)
             WorktreeRow(
                 item,
                 controller.progress(item.id),
-                controller.kind(item.path),
+                kind,
                 stats[key],
                 pull,
                 dirty[key],
                 running = running.contains(key),
+                finished = item.id in finished,
+                worktreeColor = view?.color(item.path),
             )
         }
         val hosted = if (hostedState.enabled) {
@@ -682,17 +710,64 @@ class AgentManagerPanel(
         tree.update(
             buildList {
                 current?.let { add(ActiveTreeNode(it)) }
-                add(ActiveTreeNode(groupRow, local.map { ActiveTreeNode(it) }))
+                arrange(local).forEach { (group, rows) -> add(ActiveTreeNode(group, rows.map { ActiveTreeNode(it) })) }
                 hosted.forEach { add(ActiveTreeNode(it)) }
             },
             ActiveSelection.Preserve,
         )
     }
 
+    /**
+     * Marks a worktree finished when its sessions go from running to settled while the user is not
+     * looking at it, and unmarks it as soon as anything runs or waits there again.
+     */
+    private fun trackFinished(id: String, kind: SessionActivityKind?, viewing: String?) {
+        val before = lastKind[id]
+        lastKind[id] = kind
+        if (kind != null) {
+            finished.remove(id)
+            return
+        }
+        if (before == SessionActivityKind.RUNNING && id != viewing) finished.add(id)
+    }
+
+    /** The local worktree rows in the chosen order, split into the chosen groups. */
+    private fun arrange(rows: List<WorktreeRow>): List<Pair<ActiveItem, List<WorktreeRow>>> {
+        val sort = view?.sort ?: WorktreeSort.MANUAL
+        val sorted = when (sort) {
+            WorktreeSort.MANUAL -> rows
+            WorktreeSort.NAME -> rows.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.title })
+            WorktreeSort.STATUS -> rows.sortedBy { it.state.ordinal }
+            WorktreeSort.CHANGES -> rows.sortedByDescending { it.changes }
+        }
+        return when (view?.grouping ?: WorktreeGrouping.NONE) {
+            WorktreeGrouping.NONE -> listOf(groupRow to sorted)
+            WorktreeGrouping.STATUS -> WorktreeState.entries.mapNotNull { state ->
+                sorted.filter { it.state == state }.takeIf { it.isNotEmpty() }
+                    ?.let { GroupRow("status:${state.name}", KiloBundle.message("worktree.state.${state.name.lowercase()}"), null) to it }
+            }
+            WorktreeGrouping.COLOR -> (WorktreeColor.entries + listOf<WorktreeColor?>(null)).mapNotNull { color ->
+                sorted.filter { it.worktreeColor == color }.takeIf { it.isNotEmpty() }?.let {
+                    GroupRow("color:${color?.name ?: "none"}", color?.label ?: KiloBundle.message("worktree.color.none"), color) to it
+                }
+            }
+            WorktreeGrouping.PREFIX -> {
+                val buckets = sorted.groupBy { branchPrefix(it.dto.branch) }
+                val named = buckets.keys.filterNotNull().sortedWith(String.CASE_INSENSITIVE_ORDER)
+                val keys: List<String?> = named + if (null in buckets) listOf(null) else emptyList()
+                keys.map { prefix ->
+                    GroupRow("prefix:${prefix.orEmpty()}", prefix?.let { "$it/" } ?: KiloBundle.message("worktree.group.other"), null) to
+                        buckets.getValue(prefix)
+                }
+            }
+        }
+    }
+
     @RequiresEdt
     private fun track(file: VirtualFile?) {
         val key = project?.service<WorktreeEditorMatchers>()?.match(file)
         if (key != null) {
+            if (finished.remove(key)) sync()
             tree.select(key, scroll = false)
             return
         }
@@ -908,6 +983,19 @@ class AgentManagerPanel(
         override val title: String get() = KiloBundle.message("worktree.group.local")
     }
 
+    private inner class GroupRow(
+        override val key: String,
+        override val title: String,
+        private val tint: WorktreeColor?,
+    ) : ActiveItem {
+        override val identity: Any get() = "kilo:worktree-group:$key"
+        override val color: Color? get() = tint?.fill
+
+        override fun equals(other: Any?): Boolean = other is GroupRow && other.key == key && other.title == title && other.tint == tint
+
+        override fun hashCode(): Int = key.hashCode()
+    }
+
     private inner class WorktreeRow(
         val dto: WorktreeDto,
         override val progress: String?,
@@ -917,13 +1005,19 @@ class AgentManagerPanel(
         val dirty: WorktreeDirtyDto? = null,
         val current: Boolean = false,
         val running: Boolean = false,
+        val finished: Boolean = false,
+        val worktreeColor: WorktreeColor? = null,
     ) : ActiveItem {
+        val state: WorktreeState get() = worktreeState(kind, finished)
+        val changes: Int get() = (stats?.additions ?: 0) + (stats?.deletions ?: 0) + (dirty?.additions ?: 0) + (dirty?.deletions ?: 0)
+        override val color: Color? get() = worktreeColor?.fill
         override val key: String get() = dto.id
         override val identity: Any get() = if (current) "local:${dto.path}" else "worktree:${dto.path}"
         override val title: String get() = if (current) dto.branch else WorktreeTitle.text(dto.name, dto.path, pr)
         override val description: String get() = WorktreeTitle.fallback(dto.path)
-        override val tooltip: String? get() = null
-        override val icon = WorktreeIcons.forRow(progress != null, kind, dto.locked, current, running)
+        override val tooltip: String? get() = KiloBundle.message("worktree.state.finished.tooltip").takeIf { finished && kind == null }
+        override val icon = if (finished && kind == null && progress == null) WorktreeIcons.finished
+            else WorktreeIcons.forRow(progress != null, kind, dto.locked, current, running)
         override val tinted: Boolean get() = WorktreeIcons.neutral(icon)
         override val search: String get() = listOfNotNull(dto.name, dto.branch, dto.path, dto.lockReason).joinToString(" ")
 
@@ -1025,7 +1119,9 @@ class AgentManagerPanel(
                 pr == row.pr &&
                 dirty == row.dirty &&
                 current == row.current &&
-                running == row.running
+                running == row.running &&
+                finished == row.finished &&
+                worktreeColor == row.worktreeColor
         }
 
         override fun hashCode(): Int {
@@ -1037,6 +1133,8 @@ class AgentManagerPanel(
             result = 31 * result + (dirty?.hashCode() ?: 0)
             result = 31 * result + current.hashCode()
             result = 31 * result + running.hashCode()
+            result = 31 * result + finished.hashCode()
+            result = 31 * result + (worktreeColor?.hashCode() ?: 0)
             return result
         }
     }

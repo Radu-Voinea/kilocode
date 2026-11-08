@@ -176,6 +176,11 @@ internal interface ActiveItem {
      * status icons (running, question, error) so they keep their own hue.
      */
     val tinted: Boolean get() = false
+    /**
+     * A color the user gave this row. It fills the row while it is neither selected nor hovered and
+     * always shows as a stripe on the row's leading edge, so a selected row keeps it too.
+     */
+    val color: java.awt.Color? get() = null
     val leading: List<ActiveBadge> get() = emptyList()
     /** Badges rendered after the title. */
     val badges: List<ActiveBadge> get() = emptyList()

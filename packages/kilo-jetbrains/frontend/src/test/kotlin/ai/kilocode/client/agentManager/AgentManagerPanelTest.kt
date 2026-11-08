@@ -13,6 +13,10 @@ import ai.kilocode.client.agentManager.worktree.WorktreeController
 import ai.kilocode.client.agentManager.worktree.WorktreeEditorMatcher
 import ai.kilocode.client.agentManager.worktree.WorktreeEditorMatchers
 import ai.kilocode.client.agentManager.worktree.WorktreeIcons
+import ai.kilocode.client.agentManager.worktree.WorktreeColor
+import ai.kilocode.client.agentManager.worktree.WorktreeGrouping
+import ai.kilocode.client.agentManager.worktree.WorktreeListView
+import ai.kilocode.client.agentManager.worktree.WorktreeSort
 import ai.kilocode.client.agentManager.hosted.HostedWorkspaceRow
 import ai.kilocode.client.agentManager.hosted.HostedWorkspaceIcons
 import ai.kilocode.client.agentManager.hosted.HostedWorkspaceDataKeys
@@ -707,6 +711,57 @@ class AgentManagerPanelTest : BasePlatformTestCase() {
         val row = row(panel, 0)
         assertSame(SessionActivityKind.QUESTION.icon(), row.icon)
         assertEquals(emptyList<ActiveBadge>(), row.badges)
+    }
+
+    fun `test a worktree whose agent stops running while unseen shows as finished until opened`() {
+        val item = worktree("feature-x")
+        val activity = MutableStateFlow(mapOf("ses_1" to SessionActivityDto(item.path, SessionActivityKindDto.RUNNING)))
+        rpc.listed += item
+        val controller = WorktreeController(service, project.basePath!!, coroutines.scope, activity = activity)
+        val panel = edt { AgentManagerPanel(testRootDisposable, controller, project) }
+        edt { controller.reload() }
+        flush()
+        assertSame(WorktreeIcons.running, row(panel, 0).icon)
+
+        activity.value = emptyMap()
+        waitUntil { row(panel, 0).icon === WorktreeIcons.finished }
+
+        activity.value = mapOf("ses_1" to SessionActivityDto(item.path, SessionActivityKindDto.QUESTION))
+        waitUntil { row(panel, 0).icon === SessionActivityKind.QUESTION.icon() }
+    }
+
+    fun `test worktrees group by branch prefix and keep their color`() {
+        val view = project.service<WorktreeListView>()
+        val feature = worktree("a").copy(branch = "feature/a")
+        val fix = worktree("b").copy(branch = "fix/b")
+        val solo = worktree("c").copy(branch = "solo")
+        rpc.listed += listOf(solo, fix, feature)
+        edt {
+            view.setColor(fix.path, WorktreeColor.BLUE)
+            view.grouping = WorktreeGrouping.PREFIX
+            view.sort = WorktreeSort.NAME
+        }
+        try {
+            val controller = WorktreeController(service, project.basePath!!, coroutines.scope)
+            val panel = edt { AgentManagerPanel(testRootDisposable, controller, project) }
+            edt { controller.reload() }
+            flush()
+
+            val groups = edt {
+                val tree = tree(panel)
+                (0 until tree.rowCount).mapNotNull { tree.getPathForRow(it)?.lastPathComponent as? ActiveEntry }
+                    .filter { it.allowsChildren }.map { it.item.title }
+            }
+            assertEquals(listOf("feature/", "fix/", KiloBundle.message("worktree.group.other")), groups)
+            assertEquals(listOf("feature/a", "fix/b", "solo"), (0 until rows(panel)).map { (row(panel, it) as ActiveItem).search!!.split(" ")[1] })
+            assertEquals(WorktreeColor.BLUE.fill, row(panel, 1).color)
+        } finally {
+            edt {
+                view.setColor(fix.path, null)
+                view.grouping = WorktreeGrouping.NONE
+                view.sort = WorktreeSort.MANUAL
+            }
+        }
     }
 
     fun `test worktree row uses the error icon for error activity`() {

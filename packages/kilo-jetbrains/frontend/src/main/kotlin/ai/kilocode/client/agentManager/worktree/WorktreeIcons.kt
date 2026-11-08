@@ -19,6 +19,9 @@ internal object WorktreeIcons {
     val local: Icon = IconLoader.getIcon("/icons/worktree-local.svg", WorktreeIcons::class.java)
     val spinner: Icon = AnimationIcon.Progress()
 
+    /** A worktree whose agent finished while you were looking elsewhere. */
+    val finished: Icon = AllIcons.Status.Success
+
     // Single swap point for the running-session icon. Change this to retarget the animation
     // (e.g. AnimationIcon.Progress() or SessionActivityKind.RUNNING.icon()).
     val running: Icon = SpinnerIcon.icon

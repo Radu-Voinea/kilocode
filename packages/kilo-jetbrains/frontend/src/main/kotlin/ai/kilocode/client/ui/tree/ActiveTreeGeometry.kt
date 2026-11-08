@@ -53,6 +53,10 @@ internal class ActiveTreeGeometry(private val view: ActiveTreeView, private val 
             surface.update(view.background, state.selectionColor, true, true)
             paintLocal(g, surface, frame)
         }
+        entry.item.color?.let { color ->
+            g.color = java.awt.Color(color.red, color.green, color.blue)
+            g.fillRect(frame.x, frame.y + JBUI.scale(3), JBUI.scale(3), frame.height - JBUI.scale(6))
+        }
         val path = TreePath(entry.path)
         ActiveTreePainter.paint(
             view, g, view.insets.left, frame.y, frame.width, frame.height,

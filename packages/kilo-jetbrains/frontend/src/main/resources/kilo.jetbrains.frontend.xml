@@ -435,6 +435,13 @@
         <action id="Kilo.Worktree.AddExisting"
                 class="ai.kilocode.client.actions.AddExistingWorktreeAction"/>
 
+        <group id="Kilo.Worktree.Color"
+               class="ai.kilocode.client.actions.WorktreeColorGroup"
+               popup="true"/>
+
+        <action id="Kilo.Worktree.ViewOptions"
+                class="ai.kilocode.client.actions.WorktreeViewOptionsAction"/>
+
         <action id="Kilo.Worktree.OpenPr"
                 class="ai.kilocode.client.actions.OpenWorktreePrAction"/>
 
@@ -477,6 +484,7 @@
         <group id="Kilo.Worktree.RowMenu">
             <reference ref="Kilo.HostedWorkspace.Refresh"/>
             <reference ref="Kilo.Worktree.Rename"/>
+            <reference ref="Kilo.Worktree.Color"/>
             <separator/>
             <reference ref="Kilo.Worktree.OpenPr"/>
             <separator/>
