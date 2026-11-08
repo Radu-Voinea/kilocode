@@ -316,6 +316,18 @@ class KiloWorkspaceRpcApiImpl internal constructor(
         GitComparison.open(dir, GitComparison.Mode.Local)?.files(patches).orEmpty()
     }
 
+    override suspend fun rangeDiff(directory: String, from: String, uncommitted: Boolean, patches: Boolean): List<DiffFileDto> =
+        withContext(Dispatchers.IO) {
+            val dir = file(clean(directory) ?: directory) ?: return@withContext emptyList()
+            GitComparison.range(dir, from, uncommitted)?.files(patches).orEmpty()
+        }
+
+    override suspend fun branchCommits(directory: String, limit: Int): List<ai.kilocode.rpc.dto.CommitDto> =
+        withContext(Dispatchers.IO) {
+            val dir = file(clean(directory) ?: directory) ?: return@withContext emptyList()
+            GitComparison.commits(dir, limit.coerceIn(1, 200))
+        }
+
     override suspend fun branchName(directory: String): String? = withContext(Dispatchers.IO) {
         val base = file(clean(directory) ?: directory) ?: return@withContext null
         if (!gitAvailable(base)) return@withContext null

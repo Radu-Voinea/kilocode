@@ -227,6 +227,14 @@ class KiloWorkspaceService internal constructor(
         call { localDiff(directory, patches) }
 
     @RequiresBackgroundThread
+    suspend fun rangeDiff(directory: String, from: String, uncommitted: Boolean, patches: Boolean = true): List<DiffFileDto> =
+        call { rangeDiff(directory, from, uncommitted, patches) }
+
+    @RequiresBackgroundThread
+    suspend fun branchCommits(directory: String, limit: Int = 50): List<ai.kilocode.rpc.dto.CommitDto> =
+        call { branchCommits(directory, limit) }
+
+    @RequiresBackgroundThread
     suspend fun branchName(directory: String): String? {
         return try {
             call { branchName(directory) }

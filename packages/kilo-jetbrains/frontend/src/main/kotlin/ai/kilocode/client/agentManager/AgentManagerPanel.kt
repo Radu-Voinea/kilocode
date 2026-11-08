@@ -451,7 +451,11 @@ class AgentManagerPanel(
     internal fun openDiff(item: WorktreeDto) {
         val target = project ?: return
         if (!canOpenDiff(item)) return
-        openKiloDiff(target, item.path, KiloDiffComparison.BASE, item.branch.takeUnless { it == "(detached)" })
+        // Everything the worktree changed, committed or not; the scope bar above the diff narrows it.
+        openKiloDiff(
+            target, item.path, KiloDiffComparison.BASE, item.branch.takeUnless { it == "(detached)" },
+            from = "base", uncommitted = true,
+        )
     }
 
     internal fun canOpenLocalDiff(item: WorktreeDto?): Boolean {

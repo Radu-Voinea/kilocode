@@ -481,6 +481,16 @@ data class TodoViewDto(
 
 // --- Diff DTO ---
 
+/** One commit, for choosing how far back a diff reaches. [time] is epoch milliseconds. */
+@Serializable
+data class CommitDto(
+    val sha: String,
+    val short: String,
+    val subject: String,
+    val author: String,
+    val time: Long,
+)
+
 @Serializable
 data class DiffFileDto(
     val file: String,

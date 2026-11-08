@@ -161,6 +161,21 @@ class FakeWorkspaceRpcApi : KiloWorkspaceRpcApi {
         return localDiffs.toList()
     }
 
+    val rangeDiffCalls = mutableListOf<Triple<String, String, Boolean>>()
+    val rangeDiffs = mutableMapOf<String, List<DiffFileDto>>()
+    val commits = mutableListOf<ai.kilocode.rpc.dto.CommitDto>()
+
+    override suspend fun rangeDiff(directory: String, from: String, uncommitted: Boolean, patches: Boolean): List<DiffFileDto> {
+        assertNotEdt("rangeDiff")
+        rangeDiffCalls.add(Triple(directory, from, uncommitted))
+        return rangeDiffs["$from|$uncommitted"].orEmpty()
+    }
+
+    override suspend fun branchCommits(directory: String, limit: Int): List<ai.kilocode.rpc.dto.CommitDto> {
+        assertNotEdt("branchCommits")
+        return commits.take(limit)
+    }
+
     override suspend fun branchName(directory: String): String? {
         assertNotEdt("branchName")
         branchNameCalls.add(directory)

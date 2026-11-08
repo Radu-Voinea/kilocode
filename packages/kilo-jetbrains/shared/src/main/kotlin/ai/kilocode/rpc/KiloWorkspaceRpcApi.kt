@@ -71,6 +71,15 @@ interface KiloWorkspaceRpcApi : RemoteApi<Unit> {
 
     suspend fun localDiff(directory: String, patches: Boolean = true): List<DiffFileDto>
 
+    /**
+     * Changes from [from] (`base`, `HEAD` or `HEAD~<n>`) to HEAD, or to the working tree when
+     * [uncommitted] is true.
+     */
+    suspend fun rangeDiff(directory: String, from: String, uncommitted: Boolean, patches: Boolean = true): List<DiffFileDto>
+
+    /** Commits on the current branch since the default branch, newest first, at most [limit]. */
+    suspend fun branchCommits(directory: String, limit: Int = 50): List<ai.kilocode.rpc.dto.CommitDto>
+
     /** Current git branch name for branch-scoped UI labels. */
     suspend fun branchName(directory: String): String?
 

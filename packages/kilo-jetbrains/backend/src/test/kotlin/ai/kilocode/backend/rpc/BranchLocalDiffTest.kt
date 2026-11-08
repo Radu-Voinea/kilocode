@@ -361,6 +361,37 @@ class BranchLocalDiffTest {
         return base to local
     }
 
+    @Test
+    fun `range diff reaches back the chosen number of commits and can include uncommitted work`() = runBlocking {
+        init()
+        val dir = worktree()
+        Files.writeString(dir.resolve("first.txt"), "first\n")
+        git(dir, "add", "-A")
+        git(dir, "commit", "-m", "add first")
+        Files.writeString(dir.resolve("second.txt"), "second\n")
+        git(dir, "add", "-A")
+        git(dir, "commit", "-m", "add second")
+        Files.writeString(dir.resolve("tracked.txt"), "one\nedited\nthree\n")
+        Files.writeString(dir.resolve("new.txt"), "untracked\n")
+
+        fun names(from: String, uncommitted: Boolean) = runBlocking {
+            api.rangeDiff(dir.toString(), from, uncommitted, patches = false).map { it.file }.sorted()
+        }
+        assertEquals(listOf("second.txt"), names("HEAD~1", false))
+        assertEquals(listOf("first.txt", "second.txt"), names("HEAD~2", false))
+        assertEquals(listOf("first.txt", "new.txt", "second.txt", "tracked.txt"), names("HEAD~2", true))
+        assertEquals(listOf("new.txt", "tracked.txt"), names("HEAD", true))
+        assertEquals(listOf("first.txt", "second.txt"), names("base", false))
+        assertEquals(listOf("first.txt", "new.txt", "second.txt", "tracked.txt"), names("base", true))
+        // Further back than the branch has history reaches the empty tree rather than failing.
+        assertTrue(names("HEAD~50", false).containsAll(listOf("first.txt", "second.txt", "tracked.txt")))
+        assertTrue(api.rangeDiff(dir.toString(), "nonsense", true).isEmpty())
+
+        val commits = api.branchCommits(dir.toString())
+        assertEquals(listOf("add second", "add first"), commits.map { it.subject })
+        assertEquals(7, commits.first().short.length.coerceAtMost(7))
+    }
+
     private fun init() {
         git(repo, "init", "--initial-branch=main")
         git(repo, "config", "user.email", "test@kilo.ai")

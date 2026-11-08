@@ -71,6 +71,43 @@ class KiloInlineDiffStoreTest : BasePlatformTestCase() {
         }
     }
 
+    fun `test a picked scope fetches a range diff and the bar offers the branch commits`() {
+        val wide = file("src/A.kt", 2, 1)
+        val last = file("src/B.kt", 1, 0)
+        workspace.rangeDiffs["HEAD~1|false"] = listOf(last)
+        workspace.rangeDiffs["base|true"] = listOf(wide, last)
+        workspace.commits += listOf(
+            ai.kilocode.rpc.dto.CommitDto("b".repeat(40), "bbbbbbb", "second", "Kilo", 0),
+            ai.kilocode.rpc.dto.CommitDto("a".repeat(40), "aaaaaaa", "first", "Kilo", 0),
+        )
+        val params = diffParams("branch", "/test", null, "Diff", from = "base", uncommitted = true)
+        val all = runBlocking { withContext(coroutines.dispatcher) { service.fetch(params) } } as DiffEditorData.Files
+        assertEquals(listOf("src/A.kt", "src/B.kt"), all.files.map { it.file })
+        val one = runBlocking { withContext(coroutines.dispatcher) { service.fetch(params + mapOf("from" to "HEAD~1", "uncommitted" to "false")) } } as DiffEditorData.Files
+        assertEquals(listOf("src/B.kt"), one.files.map { it.file })
+        assertTrue(workspace.branchDiffCalls.isEmpty())
+
+        val picks = mutableListOf<Pair<String, Boolean>>()
+        val bar = DiffScopeBar(params, coroutines.scope, testRootDisposable) { from, unc -> picks += from to unc }
+        waitFor { bar.choices().size == 4 }
+        assertEquals(listOf("base", "HEAD", "HEAD~1", "HEAD~2"), bar.choices().map { it.from })
+        assertEquals("base", bar.selected().from)
+        bar.pick(bar.choices()[2])
+        bar.includeUncommitted(false)
+        bar.pick(bar.choices()[1])
+        assertEquals(listOf("HEAD~1" to true, "HEAD~1" to false, "HEAD" to true), picks)
+        assertEquals(KiloBundle.message("diff.scope.last", "bbbbbbb second"), scopeLabel(bar.choices()[2]))
+    }
+
+    private fun waitFor(condition: () -> Boolean) {
+        val end = System.currentTimeMillis() + 5_000
+        while (!condition() && System.currentTimeMillis() < end) {
+            UIUtil.dispatchAllInvocationEvents()
+            Thread.sleep(10)
+        }
+        assertTrue(condition())
+    }
+
     fun `test pop returns then clears while get remains persistent`() {
         val store = project.service<KiloInlineDiffStore>()
         val files = listOf(file("src/A.kt", 2, 1))

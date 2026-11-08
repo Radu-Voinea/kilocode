@@ -63,10 +63,14 @@ internal object KiloDiffEditorKind : KiloEditorKind {
 
     @RequiresEdt
     override fun createContent(project: Project, file: KiloVirtualFile, parent: Disposable): JComponent {
+        val outer = JPanel(BorderLayout())
         val panel = JPanel(BorderLayout())
         panel.add(connecting(), BorderLayout.CENTER)
+        outer.add(panel, BorderLayout.CENTER)
         val service = project.service<KiloDiffEditorService>()
         var current: Disposable? = null
+        // The comparison the user picked in the scope bar; starts as the file's own parameters.
+        var params = file.path.params
         fun render(data: DiffEditorData) {
             current?.let { Disposer.dispose(it) }
             val child = Disposer.newDisposable(parent, "Kilo diff editor content")
@@ -79,12 +83,12 @@ internal object KiloDiffEditorKind : KiloEditorKind {
                     is DiffEditorData.Error -> failed(data.message)
                     is DiffEditorData.Files -> buildDiffEditor(
                         project,
-                        file.path.params,
+                        params,
                         data.files,
                         child,
                         data.branch,
                         service.scope,
-                        { done -> service.refresh(file.path.params, done) },
+                        { done -> service.refresh(params, done) },
                         ::render,
                     )
                 },
@@ -93,8 +97,16 @@ internal object KiloDiffEditorKind : KiloEditorKind {
             panel.revalidate()
             panel.repaint()
         }
-        service.load(file.path.params, parent, ::render)
-        return panel
+        if (params["source"] == "branch" || params["source"] == "local") {
+            val bar = DiffScopeBar(params, service.scope, parent) { from, uncommitted ->
+                params = params + mapOf("from" to from, "uncommitted" to uncommitted.toString())
+                render(DiffEditorData.Connecting)
+                service.refresh(params, ::render)
+            }
+            outer.add(bar.component, BorderLayout.NORTH)
+        }
+        service.load(params, parent, ::render)
+        return outer
     }
 }
 
@@ -107,19 +119,26 @@ internal class KiloDiffEditorService(
         get() = cs
 
     @RequiresEdt
-    fun open(directory: String, comparison: KiloDiffComparison, branch: String?, parent: Disposable) {
+    fun open(
+        directory: String,
+        comparison: KiloDiffComparison,
+        branch: String?,
+        parent: Disposable,
+        from: String? = null,
+        uncommitted: Boolean? = null,
+    ) {
         if (project.isDisposed || Disposer.isDisposed(parent) || !cs.isActive) return
         val dir = FileUtil.toCanonicalPath(FileUtil.toSystemIndependentName(directory), '/', true)
             .takeIfPresent() ?: return
         val name = branch.takeIfPresent()
         if (name != null) {
-            show(dir, comparison, name)
+            show(dir, comparison, name, from, uncommitted)
             return
         }
         val job = cs.launch {
             val branch = service<KiloWorkspaceService>().branchName(dir)
             withContext(Dispatchers.Main) {
-                if (!project.isDisposed && !Disposer.isDisposed(parent)) show(dir, comparison, branch)
+                if (!project.isDisposed && !Disposer.isDisposed(parent)) show(dir, comparison, branch, from, uncommitted)
             }
         }
         val guard = Disposable { job.cancel() }
@@ -128,11 +147,11 @@ internal class KiloDiffEditorService(
     }
 
     @RequiresEdt
-    private fun show(dir: String, comparison: KiloDiffComparison, branch: String?) {
+    private fun show(dir: String, comparison: KiloDiffComparison, branch: String?, from: String?, uncommitted: Boolean?) {
         ensureDiffEditorKind()
         val opened = project.service<KiloVfsManager>().open(
             KiloDiffEditorKind.ID,
-            diffParams(comparison.source, dir, null, comparison.title(branch), branch),
+            diffParams(comparison.source, dir, null, comparison.title(branch), branch, from = from, uncommitted = uncommitted),
         )
         if (opened) Telemetry.send("Diff Editor Opened", mapOf("source" to comparison.source))
     }
@@ -187,7 +206,10 @@ internal class KiloDiffEditorService(
         val workspace = service<KiloWorkspaceService>()
         val store = project.service<KiloInlineDiffStore>()
         val session = project.service<KiloSessionService>()
-        val files = when (params["source"]) {
+        val from = params["from"].takeIfPresent()
+        val ranged = from != null && (params["source"] == "branch" || params["source"] == "local")
+        val files = when (if (ranged) "range" else params["source"]) {
+            "range" -> workspace.rangeDiff(dir, from!!, params["uncommitted"] == "true")
             "branch" -> workspace.branchDiff(dir)
             "local" -> workspace.localDiff(dir)
             "inline" -> store.get(params["token"].orEmpty()).orEmpty()
@@ -252,7 +274,16 @@ internal sealed interface DiffEditorData {
     data class Files(val files: List<DiffFileDto>, val branch: String? = null) : DiffEditorData
 }
 
-internal fun diffParams(source: String, directory: String, sessionId: String?, title: String, branch: String? = null, token: String? = null): Map<String, String> =
+internal fun diffParams(
+    source: String,
+    directory: String,
+    sessionId: String?,
+    title: String,
+    branch: String? = null,
+    token: String? = null,
+    from: String? = null,
+    uncommitted: Boolean? = null,
+): Map<String, String> =
     linkedMapOf(
         "source" to source,
         "directory" to directory,
@@ -261,6 +292,8 @@ internal fun diffParams(source: String, directory: String, sessionId: String?, t
         if (!sessionId.isNullOrBlank()) put("sessionId", sessionId)
         if (!branch.isNullOrBlank()) put("branch", branch)
         if (!token.isNullOrBlank()) put("token", token)
+        if (!from.isNullOrBlank()) put("from", from)
+        if (uncommitted != null) put("uncommitted", uncommitted.toString())
     }
 
 fun ensureDiffEditorKind() {
@@ -283,9 +316,11 @@ fun openKiloDiff(
     comparison: KiloDiffComparison,
     branch: String? = null,
     parent: Disposable = project,
+    from: String? = null,
+    uncommitted: Boolean? = null,
 ) {
     if (project.isDisposed || Disposer.isDisposed(parent)) return
-    project.service<KiloDiffEditorService>().open(directory, comparison, branch, parent)
+    project.service<KiloDiffEditorService>().open(directory, comparison, branch, parent, from, uncommitted)
 }
 
 private fun connecting(): JComponent = Stack.horizontal(gap = UiStyle.Gap.sm()).apply {

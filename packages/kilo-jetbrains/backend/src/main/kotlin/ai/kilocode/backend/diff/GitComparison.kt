@@ -64,6 +64,37 @@ internal class GitComparison private constructor(
             return GitComparison(dir, head, label, tip, ancestor, head)
         }
 
+        /** Git's well-known empty tree, the "before" of a range reaching past the first commit. */
+        private const val EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+        /**
+         * A comparison chosen by the user: from [from] (`base` for the branch's merge-base with the default
+         * branch, `HEAD`, or `HEAD~<n>`) up to HEAD, or up to the working tree (uncommitted and untracked
+         * changes included) when [uncommitted] is true.
+         */
+        fun range(dir: Path, from: String, uncommitted: Boolean): GitComparison? {
+            val base = open(dir, if (from == "base") Mode.Base else Mode.Local) ?: return null
+            val start = when {
+                from == "base" -> base.from
+                from == "HEAD" -> base.head
+                from.matches(Regex("HEAD~\\d+")) -> revision(dir, from) ?: EMPTY_TREE
+                else -> return null
+            }
+            return GitComparison(dir, base.head, base.base, base.tip, start, if (uncommitted) null else base.head)
+        }
+
+        /** Commits on HEAD since the default branch (or the latest [limit] when there is none), newest first. */
+        fun commits(dir: Path, limit: Int): List<ai.kilocode.rpc.dto.CommitDto> {
+            val base = open(dir, Mode.Base) ?: return emptyList()
+            val range = if (base.from == base.head) "HEAD" else "${base.from}..HEAD"
+            val out = runGitCommand(dir, listOf("log", "--first-parent", "-n", limit.toString(), "--format=%H%x1f%h%x1f%s%x1f%an%x1f%ct", range))
+            if (!out.ok) return emptyList()
+            return out.stdout.lineSequence().filter { it.isNotBlank() }.mapNotNull { line ->
+                val p = line.split('\u001f')
+                if (p.size < 5) null else ai.kilocode.rpc.dto.CommitDto(p[0], p[1], p[2], p[3], (p[4].toLongOrNull() ?: 0L) * 1000)
+            }.toList()
+        }
+
         private fun revision(dir: Path, ref: String): String? =
             git(dir, "rev-parse", "--verify", "--quiet", "$ref^{commit}", optional = true).trim().ifEmpty { null }
 
