@@ -1,13 +1,11 @@
 package ai.kilocode.client.session.ui.prompt
 
 import com.intellij.ide.PasteProvider
-import com.intellij.ide.dnd.FileCopyPasteUtil
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.actionSystem.DataContext
 import com.intellij.openapi.editor.actions.PasteAction
 import com.intellij.openapi.util.Key
-import java.awt.datatransfer.DataFlavor
 
 internal fun interface PromptTextPasteHandler {
     fun paste(text: String)
@@ -38,10 +36,6 @@ internal class PromptTextPasteProvider : PasteProvider {
         val editor = dataContext.getData(CommonDataKeys.EDITOR) ?: return null
         if (editor.getUserData(PROMPT_TEXT_PASTE_HANDLER_KEY) == null) return null
         val item = dataContext.getData(PasteAction.TRANSFERABLE_PROVIDER)?.produce() ?: return null
-        if (!item.isDataFlavorSupported(DataFlavor.stringFlavor)) return null
-        if (FileCopyPasteUtil.isFileListFlavorAvailable(item.transferDataFlavors)) return null
-        if (item.isDataFlavorSupported(DataFlavor.imageFlavor)) return null
-        val value = item.getTransferData(DataFlavor.stringFlavor) as? String ?: return null
-        return value.takeIf(::collapsible)
+        return collapsibleText(item)
     }
 }

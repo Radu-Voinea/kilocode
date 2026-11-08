@@ -76,6 +76,38 @@ object PromptAttachmentExtractor {
 
     fun image(mime: String): Boolean = mime in RASTER_IMAGE_MIMES
 
+    /**
+     * The image on the clipboard as an attachment: the encoded bytes of a raster image flavor
+     * when one is offered (no decode, and works where the toolkit's [java.awt.Image] arrives
+     * unloaded, as on Wayland), else the decoded [java.awt.datatransfer.DataFlavor.imageFlavor].
+     */
+    fun clipboardImage(item: java.awt.datatransfer.Transferable): PromptAttachment? {
+        for (flavor in item.transferDataFlavors) {
+            val mime = "${flavor.primaryType}/${flavor.subType}".lowercase()
+            if (mime !in RASTER_IMAGE_MIMES || !java.io.InputStream::class.java.isAssignableFrom(flavor.representationClass)) continue
+            val bytes = runCatching { (item.getTransferData(flavor) as java.io.InputStream).use { it.readBytes() } }.getOrNull()
+            if (bytes != null && bytes.isNotEmpty()) return encoded(mime, bytes)
+        }
+        if (!item.isDataFlavorSupported(java.awt.datatransfer.DataFlavor.imageFlavor)) return null
+        return item.getTransferData(java.awt.datatransfer.DataFlavor.imageFlavor)?.let(::image)
+    }
+
+    /** Whether [item] offers an image, decoded or as encoded raster bytes. */
+    fun hasClipboardImage(item: java.awt.datatransfer.Transferable): Boolean =
+        item.isDataFlavorSupported(java.awt.datatransfer.DataFlavor.imageFlavor) ||
+            item.transferDataFlavors.any { "${it.primaryType}/${it.subType}".lowercase() in RASTER_IMAGE_MIMES }
+
+    private fun encoded(mime: String, bytes: ByteArray): PromptAttachment {
+        val id = UUID.randomUUID().toString()
+        val ext = mime.substringAfter('/')
+        return PromptAttachment(
+            id = "clipboard-image:$id",
+            name = "pasted-image-$id.$ext",
+            mime = mime,
+            url = "data:$mime;base64,${Base64.getEncoder().encodeToString(bytes)}",
+        )
+    }
+
     fun image(raw: Any): PromptAttachment? {
         val image = when (raw) {
             is MultiResolutionImage -> raw.resolutionVariants.firstOrNull()?.buffered()
@@ -112,6 +144,8 @@ object PromptAttachmentExtractor {
 
     private fun Image.buffered(): BufferedImage? {
         if (this is BufferedImage) return this
+        // A toolkit image may not be loaded yet (size -1); ImageIcon waits for it.
+        if (getWidth(null) <= 0 || getHeight(null) <= 0) javax.swing.ImageIcon(this)
         val width = getWidth(null)
         val height = getHeight(null)
         if (width <= 0 || height <= 0) return null

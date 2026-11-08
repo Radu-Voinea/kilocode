@@ -15,6 +15,9 @@
         <applicationService serviceImplementation="ai.kilocode.client.autocomplete.KiloAutocompleteSettingsService"/>
         <customPasteProvider implementation="ai.kilocode.client.session.ui.prompt.PromptAttachmentPasteProvider"/>
         <customPasteProvider implementation="ai.kilocode.client.session.ui.prompt.PromptTextPasteProvider"/>
+        <editorActionHandler action="EditorPaste"
+                             implementationClass="ai.kilocode.client.session.ui.prompt.PromptPasteActionHandler"
+                             order="first"/>
         <diff.DiffExtension implementation="ai.kilocode.client.review.ReviewDiffExtension"/>
 
         <notificationGroup id="Kilo Code"

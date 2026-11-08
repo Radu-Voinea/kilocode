@@ -1102,14 +1102,18 @@ class PromptPanel(
             val start = System.nanoTime()
             try {
                 val list = files ?: transferable?.let { FileCopyPasteUtil.getFileList(it).orEmpty() }.orEmpty()
-                val image = transferable?.takeIf { list.isEmpty() && it.isDataFlavorSupported(DataFlavor.imageFlavor) }
-                    ?.getTransferData(DataFlavor.imageFlavor)
-                    ?.let(PromptAttachmentExtractor::image)
+                val offered = transferable?.takeIf { list.isEmpty() }?.let(PromptAttachmentExtractor::hasClipboardImage) == true
+                val image = transferable?.takeIf { offered }?.let(PromptAttachmentExtractor::clipboardImage)
                 val items = PromptAttachmentExtractor.files(list) + listOfNotNull(image)
                 val ms = elapsedMs(start)
-                LOG.debug { "kind=$kind extract area=$area files=${list.size} image=${image != null} attachments=${items.size} extractMs=$ms sourceMs=$sourceMs" }
+                LOG.info("kind=$kind extract area=$area files=${list.size} image=${image != null} attachments=${items.size} extractMs=$ms sourceMs=$sourceMs flavors=${transferable?.transferDataFlavors?.joinToString { it.mimeType }}")
                 if (items.isEmpty()) {
-                    if (list.isNotEmpty()) {
+                    if (offered) {
+                        ApplicationManager.getApplication().invokeLater {
+                            if (project.isDisposed) return@invokeLater
+                            notify(KiloBundle.message("prompt.attachment.image.unreadable"))
+                        }
+                    } else if (list.isNotEmpty()) {
                         ApplicationManager.getApplication().invokeLater {
                             if (project.isDisposed) return@invokeLater
                             notify(KiloBundle.message("prompt.attachment.drop.empty"))

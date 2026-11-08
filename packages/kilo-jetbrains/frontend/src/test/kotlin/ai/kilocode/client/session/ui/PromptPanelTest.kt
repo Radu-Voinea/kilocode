@@ -1322,6 +1322,92 @@ class PromptPanelTest : BasePlatformTestCase() {
         assertEquals(1, panel.attachmentCountForTest())
     }
 
+    // Ctrl+V runs the platform's EditorPaste action. A prompt without a completion provider has no PSI
+    // file, which is how IntelliJ 2026.3 sees every prompt editor: its PasteHandler then skips the
+    // customPasteProviders and pastes plain text, dropping images and files. PromptPasteActionHandler
+    // has to claim those pastes on its own.
+    fun `test editor paste action attaches a clipboard image without a psi file`() {
+        val panel = PromptPanel(project, { _, _ -> }, {}, { _, _ -> })
+        val ed = realizedEditor(panel)
+        installPasteHandler()
+        CopyPasteManager.getInstance().setContents(ImageTransferable(BufferedImage(3, 3, BufferedImage.TYPE_INT_ARGB)))
+
+        paste(ed)
+        waitForAttachments(panel, 1)
+
+        assertEquals(1, panel.attachmentCountForTest())
+        assertEquals("", ed.document.text)
+    }
+
+    fun `test editor paste action attaches a copied file without a psi file`() {
+        val panel = PromptPanel(project, { _, _ -> }, {}, { _, _ -> })
+        val ed = realizedEditor(panel)
+        installPasteHandler()
+        val file = File.createTempFile("kilo-paste", ".png")
+        javax.imageio.ImageIO.write(BufferedImage(3, 3, BufferedImage.TYPE_INT_ARGB), "png", file)
+        CopyPasteManager.getInstance().setContents(FileListTransferable(listOf(file)))
+
+        paste(ed)
+        waitForAttachments(panel, 1)
+
+        assertEquals(1, panel.attachmentCountForTest())
+        assertEquals("", ed.document.text)
+    }
+
+    fun `test editor paste action collapses large text and leaves short text to the editor`() {
+        val panel = PromptPanel(project, { _, _ -> }, {}, { _, _ -> })
+        val ed = realizedEditor(panel)
+        installPasteHandler()
+        val text = (1..20).joinToString("\n") { "line $it" }
+        CopyPasteManager.getInstance().setContents(StringSelection(text))
+
+        paste(ed)
+
+        assertEquals(text, ed.document.text)
+        assertEquals(1, ed.foldingModel.allFoldRegions.size)
+        assertEquals(0, panel.attachmentCountForTest())
+
+        CopyPasteManager.getInstance().setContents(StringSelection("!"))
+        paste(ed)
+        assertEquals(text + "!", ed.document.text)
+    }
+
+    fun `test paste handler leaves other editors to the original handler`() {
+        val editor = createEditor()
+        installPasteHandler()
+        try {
+            CopyPasteManager.getInstance().setContents(ImageTransferable(BufferedImage(3, 3, BufferedImage.TYPE_INT_ARGB)))
+            var seen = false
+            editor.putUserData(PROMPT_ATTACHMENT_PASTE_HANDLER_KEY, null)
+            paste(editor)
+            editor.putUserData(PROMPT_ATTACHMENT_PASTE_HANDLER_KEY, PromptAttachmentPasteHandler { seen = true })
+            paste(editor)
+            assertTrue(seen)
+        } finally {
+            EditorFactory.getInstance().releaseEditor(editor)
+        }
+    }
+
+    private fun installPasteHandler() {
+        val manager = com.intellij.openapi.editor.actionSystem.EditorActionManager.getInstance()
+        val id = com.intellij.openapi.actionSystem.IdeActions.ACTION_EDITOR_PASTE
+        val old = manager.getActionHandler(id)
+        manager.setActionHandler(id, ai.kilocode.client.session.ui.prompt.PromptPasteActionHandler(old))
+        com.intellij.openapi.util.Disposer.register(testRootDisposable) { manager.setActionHandler(id, old) }
+    }
+
+    private fun paste(editor: Editor) {
+        com.intellij.testFramework.EditorTestUtil.executeAction(editor, com.intellij.openapi.actionSystem.IdeActions.ACTION_EDITOR_PASTE, true)
+    }
+
+    private fun waitForAttachments(panel: PromptPanel, count: Int) {
+        val end = System.currentTimeMillis() + 5_000
+        while (panel.attachmentCountForTest() < count && System.currentTimeMillis() < end) {
+            UIUtil.dispatchAllInvocationEvents()
+            Thread.sleep(20)
+        }
+    }
+
     fun `test normal text paste is not intercepted`() {
         val editor = createEditor()
         val provider = PromptAttachmentPasteProvider()

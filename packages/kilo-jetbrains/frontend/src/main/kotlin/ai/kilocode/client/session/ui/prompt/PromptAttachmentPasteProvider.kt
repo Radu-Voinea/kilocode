@@ -1,13 +1,11 @@
 package ai.kilocode.client.session.ui.prompt
 
 import com.intellij.ide.PasteProvider
-import com.intellij.ide.dnd.FileCopyPasteUtil
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.actionSystem.DataContext
 import com.intellij.openapi.editor.actions.PasteAction
 import com.intellij.openapi.util.Key
-import java.awt.datatransfer.DataFlavor
 import java.awt.datatransfer.Transferable
 
 internal fun interface PromptAttachmentPasteHandler {
@@ -35,8 +33,6 @@ internal class PromptAttachmentPasteProvider : PasteProvider {
         val editor = dataContext.getData(CommonDataKeys.EDITOR) ?: return null
         if (editor.getUserData(PROMPT_ATTACHMENT_PASTE_HANDLER_KEY) == null) return null
         val item = dataContext.getData(PasteAction.TRANSFERABLE_PROVIDER)?.produce() ?: return null
-        if (FileCopyPasteUtil.isFileListFlavorAvailable(item.transferDataFlavors)) return item
-        if (item.isDataFlavorSupported(DataFlavor.imageFlavor)) return item
-        return null
+        return item.takeIf(::attachable)
     }
 }
