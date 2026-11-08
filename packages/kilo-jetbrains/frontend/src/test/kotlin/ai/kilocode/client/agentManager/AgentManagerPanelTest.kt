@@ -764,6 +764,41 @@ class AgentManagerPanelTest : BasePlatformTestCase() {
         }
     }
 
+    fun `test color groups follow the renamed and reordered palette`() {
+        val view = project.service<WorktreeListView>()
+        val red = worktree("a")
+        val blue = worktree("b")
+        rpc.listed += listOf(red, blue)
+        edt {
+            view.setColor(red.path, WorktreeColor.RED)
+            view.setColor(blue.path, WorktreeColor.BLUE)
+            view.setPalette(listOf(WorktreeColor.BLUE, WorktreeColor.RED), mapOf(WorktreeColor.BLUE to "Reviews", WorktreeColor.RED to " "))
+            view.grouping = WorktreeGrouping.COLOR
+        }
+        try {
+            assertEquals(WorktreeColor.entries.size, view.palette.size)
+            assertEquals(listOf(WorktreeColor.BLUE, WorktreeColor.RED, WorktreeColor.ORANGE), view.palette.take(3))
+            val controller = WorktreeController(service, project.basePath!!, coroutines.scope)
+            val panel = edt { AgentManagerPanel(testRootDisposable, controller, project) }
+            edt { controller.reload() }
+            flush()
+
+            val groups = edt {
+                val tree = tree(panel)
+                (0 until tree.rowCount).mapNotNull { tree.getPathForRow(it)?.lastPathComponent as? ActiveEntry }
+                    .filter { it.allowsChildren }.map { it.item.title }
+            }
+            assertEquals(listOf("Reviews", WorktreeColor.RED.label), groups)
+        } finally {
+            edt {
+                view.setColor(red.path, null)
+                view.setColor(blue.path, null)
+                view.setPalette(WorktreeColor.entries, emptyMap())
+                view.grouping = WorktreeGrouping.NONE
+            }
+        }
+    }
+
     fun `test worktree row uses the error icon for error activity`() {
         val item = WorktreeDto("/repo/.kilo/worktrees/feature-x", "feature-x", "feature/x", "/repo/.kilo/worktrees/feature-x")
         val activity = MutableStateFlow(mapOf(

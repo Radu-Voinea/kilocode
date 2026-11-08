@@ -33,6 +33,7 @@ enum class WorktreeColor(private val rgb: Int) {
 
     val swatch: Color get() = Color(rgb)
 
+    /** The built-in name; a project can rename it, see [WorktreeListView.label]. */
     val label: String get() = KiloBundle.message("worktree.color.${name.lowercase()}")
 }
 
@@ -67,6 +68,8 @@ internal fun branchPrefix(branch: String): String? = branch.substringBefore('/',
 class WorktreeListView(private val project: Project) : PersistentStateComponent<WorktreeListView.Data> {
     class Data {
         var colors: MutableMap<String, String> = mutableMapOf()
+        var names: MutableMap<String, String> = mutableMapOf()
+        var order: MutableList<String> = mutableListOf()
     }
 
     private var data = Data()
@@ -83,6 +86,25 @@ class WorktreeListView(private val project: Project) : PersistentStateComponent<
 
     fun setColor(path: String, color: WorktreeColor?) {
         if (color == null) data.colors.remove(key(path)) else data.colors[key(path)] = color.name
+        changed()
+    }
+
+    /** The colors in the user's order; colors missing from a saved order keep their built-in place at the end. */
+    val palette: List<WorktreeColor>
+        get() {
+            val saved = data.order.mapNotNull { n -> WorktreeColor.entries.firstOrNull { it.name == n } }.distinct()
+            return saved + WorktreeColor.entries.filter { it !in saved }
+        }
+
+    /** The user's name for [color], or its built-in name. */
+    fun label(color: WorktreeColor): String = data.names[color.name]?.takeIf { it.isNotBlank() } ?: color.label
+
+    /** Saves the color order and names in one go; a blank or unchanged name falls back to the built-in one. */
+    fun setPalette(order: List<WorktreeColor>, names: Map<WorktreeColor, String>) {
+        data.order = order.map { it.name }.toMutableList()
+        data.names = names.mapNotNull { (color, name) ->
+            name.trim().takeIf { it.isNotEmpty() && it != color.label }?.let { color.name to it }
+        }.toMap().toMutableMap()
         changed()
     }
 

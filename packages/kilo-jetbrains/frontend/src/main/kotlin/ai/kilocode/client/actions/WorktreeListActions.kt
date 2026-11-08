@@ -2,7 +2,9 @@ package ai.kilocode.client.actions
 
 import ai.kilocode.client.agentManager.SidePanelKeys
 import ai.kilocode.client.agentManager.SidePanelMode
+import ai.kilocode.client.agentManager.worktree.ColorDotIcon
 import ai.kilocode.client.agentManager.worktree.WorktreeColor
+import ai.kilocode.client.agentManager.worktree.WorktreeColorsDialog
 import ai.kilocode.client.agentManager.worktree.WorktreeGrouping
 import ai.kilocode.client.agentManager.worktree.WorktreeListView
 import ai.kilocode.client.agentManager.worktree.WorktreeSort
@@ -56,24 +58,53 @@ class WorktreeColorGroup : com.intellij.openapi.actionSystem.ActionGroup(), Dumb
         e.presentation.isEnabledAndVisible = panel != null && panel.canColor(e.getData(WorktreeDataKeys.WORKTREE))
     }
 
-    override fun getChildren(e: AnActionEvent?): Array<AnAction> =
-        (WorktreeColor.entries.map { SetColor(it) } + com.intellij.openapi.actionSystem.Separator.create() + SetColor(null)).toTypedArray()
+    override fun getChildren(e: AnActionEvent?): Array<AnAction> {
+        val view = e?.project?.service<WorktreeListView>()
+        val colors = view?.palette ?: WorktreeColor.entries
+        return (colors.map { SetColor(it, view?.label(it) ?: it.label) } +
+            com.intellij.openapi.actionSystem.Separator.create() +
+            SetColor(null, KiloBundle.message("worktree.color.none")) +
+            com.intellij.openapi.actionSystem.Separator.create() +
+            ManageWorktreeColorsAction()).toTypedArray()
+    }
 
-    private class SetColor(private val color: WorktreeColor?) : com.intellij.openapi.actionSystem.ToggleAction(
-        color?.label ?: KiloBundle.message("worktree.color.none"),
-        null,
-        color?.let { com.intellij.util.ui.ColorIcon(12, it.swatch) },
-    ), DumbAware {
+    /**
+     * A plain action, not a ToggleAction: menus draw a toggle's check where its icon goes, which hid the color
+     * dots. The current color gets the check next to its dot instead.
+     */
+    private class SetColor(private val color: WorktreeColor?, text: String) : AnAction(text), DumbAware {
         override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
 
-        override fun isSelected(e: AnActionEvent): Boolean =
-            e.getData(SidePanelKeys.WORKTREE_PANEL)?.worktreeColor(e.getData(WorktreeDataKeys.WORKTREE)) == color
+        override fun update(e: AnActionEvent) {
+            val current = e.getData(SidePanelKeys.WORKTREE_PANEL)?.worktreeColor(e.getData(WorktreeDataKeys.WORKTREE))
+            val mark = if (current == color) com.intellij.icons.AllIcons.Actions.Checked else com.intellij.util.ui.EmptyIcon.ICON_16
+            val dot: javax.swing.Icon = color?.let { ColorDotIcon(it.swatch) } ?: com.intellij.util.ui.EmptyIcon.create(12)
+            e.presentation.icon = com.intellij.ui.RowIcon(mark, dot)
+        }
 
-        override fun setSelected(e: AnActionEvent, state: Boolean) {
+        override fun actionPerformed(e: AnActionEvent) {
             val panel = e.getData(SidePanelKeys.WORKTREE_PANEL) ?: return
             val item = e.getData(WorktreeDataKeys.WORKTREE) ?: return
             panel.setWorktreeColor(item, color)
         }
+    }
+}
+
+/** Opens the dialog that renames and reorders the worktree colors of this project. */
+class ManageWorktreeColorsAction : AnAction(
+    KiloBundle.message("worktree.colors.manage"),
+    KiloBundle.message("worktree.colors.manage.description"),
+    null,
+), DumbAware {
+    override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
+
+    override fun update(e: AnActionEvent) {
+        e.presentation.isEnabledAndVisible = e.project != null
+    }
+
+    override fun actionPerformed(e: AnActionEvent) {
+        val project = e.project ?: return
+        WorktreeColorsDialog(project, project.service<WorktreeListView>()).show()
     }
 }
 
@@ -102,6 +133,8 @@ class WorktreeViewOptionsAction : AnAction(
         WorktreeGrouping.entries.forEach { grouping ->
             group.add(choice(KiloBundle.message("worktree.view.group.${grouping.name.lowercase()}"), { view.grouping == grouping }) { view.grouping = grouping })
         }
+        group.addSeparator()
+        group.add(ManageWorktreeColorsAction())
         val popup = JBPopupFactory.getInstance().createActionGroupPopup(
             null, group, e.dataContext, JBPopupFactory.ActionSelectionAid.SPEEDSEARCH, true,
         )

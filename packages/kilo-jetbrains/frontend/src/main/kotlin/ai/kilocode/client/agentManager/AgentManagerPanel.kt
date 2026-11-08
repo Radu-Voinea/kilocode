@@ -746,9 +746,10 @@ class AgentManagerPanel(
                 sorted.filter { it.state == state }.takeIf { it.isNotEmpty() }
                     ?.let { GroupRow("status:${state.name}", KiloBundle.message("worktree.state.${state.name.lowercase()}"), null) to it }
             }
-            WorktreeGrouping.COLOR -> (WorktreeColor.entries + listOf<WorktreeColor?>(null)).mapNotNull { color ->
+            WorktreeGrouping.COLOR -> ((view?.palette ?: WorktreeColor.entries) + listOf<WorktreeColor?>(null)).mapNotNull { color ->
                 sorted.filter { it.worktreeColor == color }.takeIf { it.isNotEmpty() }?.let {
-                    GroupRow("color:${color?.name ?: "none"}", color?.label ?: KiloBundle.message("worktree.color.none"), color) to it
+                    val title = color?.let { c -> view?.label(c) ?: c.label } ?: KiloBundle.message("worktree.color.none")
+                    GroupRow("color:${color?.name ?: "none"}", title, color) to it
                 }
             }
             WorktreeGrouping.PREFIX -> {
