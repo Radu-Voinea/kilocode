@@ -51,7 +51,7 @@ class GenerateCommitMessageAction : DumbAwareAction() {
         object : Task.Backgroundable(project, KiloBundle.message("commitMessage.progress"), true) {
             override fun run(indicator: ProgressIndicator) {
                 val text = runBlockingCancellable {
-                    service<KiloSessionService>().generateCommitMessage(request.root, request.files, previous)
+                    project.service<KiloSessionService>().generateCommitMessage(request.root, request.files, previous)
                 }
                 ApplicationManager.getApplication().invokeLater {
                     if (!project.isDisposed) control.setCommitMessage(text)
