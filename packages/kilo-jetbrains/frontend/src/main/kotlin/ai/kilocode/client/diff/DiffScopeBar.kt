@@ -18,7 +18,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.awt.FlowLayout
 import javax.swing.DefaultComboBoxModel
 import javax.swing.JComponent
 import javax.swing.JPanel
@@ -80,15 +79,31 @@ internal class DiffScopeBar(
     private val combo = ComboBox(model).apply {
         renderer = SimpleListCellRenderer.create("") { scopeLabel(it) }
         toolTipText = KiloBundle.message("diff.scope.tooltip")
+        // Fixed width: the popup still widens to show full commit subjects.
+        setMinimumAndPreferredWidth(JBUI.scale(320))
+        isSwingPopup = false
     }
     private val working = JBCheckBox(KiloBundle.message("diff.scope.includeUncommitted"))
     private var syncing = false
 
-    val component: JComponent = JPanel(FlowLayout(FlowLayout.LEFT, JBUI.scale(8), JBUI.scale(4))).apply {
-        border = JBUI.Borders.customLineBottom(JBUI.CurrentTheme.CustomFrameDecorations.separatorForeground())
-        add(JBLabel(KiloBundle.message("diff.scope.label")).apply { foreground = UIUtil.getContextHelpForeground() })
-        add(combo)
-        add(working)
+    // One row that never wraps: long commit subjects would otherwise make the combo wider than the editor,
+    // push it onto a second FlowLayout row the panel height does not account for, and clip it.
+    val component: JComponent = JPanel(java.awt.GridBagLayout()).apply {
+        border = JBUI.Borders.compound(
+            JBUI.Borders.customLineBottom(JBUI.CurrentTheme.CustomFrameDecorations.separatorForeground()),
+            JBUI.Borders.empty(4, 8),
+        )
+        val gap = JBUI.scale(8)
+        val c = java.awt.GridBagConstraints().apply {
+            gridy = 0
+            anchor = java.awt.GridBagConstraints.WEST
+            fill = java.awt.GridBagConstraints.NONE
+        }
+        add(JBLabel(KiloBundle.message("diff.scope.label")).apply { foreground = UIUtil.getContextHelpForeground() },
+            c.apply { gridx = 0; insets = java.awt.Insets(0, 0, 0, gap) })
+        add(combo, c.apply { gridx = 1; insets = java.awt.Insets(0, 0, 0, gap) })
+        add(working, c.apply { gridx = 2; insets = java.awt.Insets(0, 0, 0, 0) })
+        add(JPanel().apply { isOpaque = false }, c.apply { gridx = 3; weightx = 1.0; fill = java.awt.GridBagConstraints.HORIZONTAL })
     }
 
     init {
