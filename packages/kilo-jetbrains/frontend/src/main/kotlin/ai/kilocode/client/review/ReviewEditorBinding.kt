@@ -44,6 +44,10 @@ internal class ReviewEditorBinding(
     private var hover: RangeHighlighter? = null
     private var hoverLine = -1
     private var scheduled = false
+    // A press on the "+" that is then dragged picks a range of lines, as on GitHub.
+    private var anchor = -1
+    private var dragged = false
+    private var skipClick = false
 
     init {
         Disposer.register(parent, this)
@@ -51,9 +55,39 @@ internal class ReviewEditorBinding(
         editor.putUserData(KEY, this)
         editor.addEditorMouseMotionListener(object : EditorMouseMotionListener {
             override fun mouseMoved(e: EditorMouseEvent) = hoverAt(e.logicalPosition.line.takeIf { e.isOverText || e.area != null } ?: -1)
+
+            override fun mouseDragged(e: EditorMouseEvent) {
+                if (anchor < 0) return
+                dragTo(e.logicalPosition.line)
+                e.consume()
+            }
         }, this)
         editor.addEditorMouseListener(object : EditorMouseListener {
-            override fun mouseExited(event: EditorMouseEvent) = hoverAt(-1)
+            override fun mouseExited(event: EditorMouseEvent) {
+                if (anchor < 0) hoverAt(-1)
+            }
+
+            override fun mousePressed(event: EditorMouseEvent) {
+                skipClick = false
+                val mouse = event.mouseEvent
+                if (event.area != com.intellij.openapi.editor.event.EditorMouseEventArea.LINE_MARKERS_AREA) return
+                if (mouse.button != java.awt.event.MouseEvent.BUTTON1 || mouse.isPopupTrigger) return
+                val line = event.logicalPosition.line
+                if (line != hoverLine) return
+                anchor = line
+                dragged = false
+            }
+
+            override fun mouseReleased(event: EditorMouseEvent) {
+                if (anchor < 0) return
+                val start = anchor
+                anchor = -1
+                if (!dragged) return
+                val end = event.logicalPosition.line
+                skipClick = true
+                startDraft(minOf(start, end), maxOf(start, end))
+                event.consume()
+            }
         }, this)
         // The unified view fills its editor after the diff computes; cards and mappings follow it.
         editor.document.addDocumentListener(object : DocumentListener {
@@ -149,6 +183,31 @@ internal class ReviewEditorBinding(
         (draft?.renderer as? ComponentInlayRenderer<*>)?.component.let { (it as? ReviewCard)?.refreshTarget() }
     }
 
+    /** Selects the whole lines from the drag's start to [line], so the range shows while dragging. */
+    internal fun dragTo(line: Int) {
+        val doc = editor.document
+        if (anchor < 0 || doc.lineCount == 0) return
+        val last = line.coerceIn(0, doc.lineCount - 1)
+        if (last != anchor) dragged = true
+        val first = minOf(anchor, last)
+        val end = maxOf(anchor, last)
+        editor.selectionModel.setSelection(doc.getLineStartOffset(first), doc.getLineEndOffset(end))
+    }
+
+    /** Starts a gutter drag on [line], for tests. */
+    internal fun pressForTest(line: Int) {
+        anchor = line
+        dragged = false
+    }
+
+    /** Ends a gutter drag on [line], for tests. */
+    internal fun releaseForTest(line: Int) {
+        val start = anchor
+        anchor = -1
+        if (!dragged) return
+        startDraft(minOf(start, line), maxOf(start, line))
+    }
+
     private fun hoverAt(line: Int) {
         val ok = line >= 0 && surface.locate(line) != null
         val next = if (ok) line else -1
@@ -204,6 +263,11 @@ internal class ReviewEditorBinding(
 
         override fun getClickAction(): AnAction = object : DumbAwareAction() {
             override fun actionPerformed(e: AnActionEvent) {
+                // A drag already opened its range draft on release.
+                if (skipClick) {
+                    skipClick = false
+                    return
+                }
                 val (first, last) = range(line)
                 startDraft(first, last)
             }

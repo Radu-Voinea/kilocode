@@ -155,4 +155,26 @@ class KiloReviewServiceTest : BasePlatformTestCase() {
             EditorFactory.getInstance().releaseEditor(editor)
         }
     }
+
+    fun `test dragging the gutter plus selects a line range and opens one draft under its last line`() {
+        val doc = EditorFactory.getInstance().createDocument("a\nb\nc\nd\n")
+        val editor = EditorFactory.getInstance().createViewer(doc, project) as EditorEx
+        val parent = Disposer.newDisposable(testRootDisposable, "drag")
+        try {
+            val binding = ReviewEditorBinding(project, SideSurface(editor, scope, "src/Drag.kt", ReviewSide.NEW, null), parent)
+            binding.pressForTest(0)
+            binding.dragTo(1)
+            binding.dragTo(2)
+            assertEquals(doc.getLineStartOffset(0), editor.selectionModel.selectionStart)
+            assertEquals(doc.getLineEndOffset(2), editor.selectionModel.selectionEnd)
+
+            binding.releaseForTest(2)
+            val inlays = editor.inlayModel.getBlockElementsInRange(0, doc.textLength)
+            assertEquals(1, inlays.size)
+            assertEquals(2, doc.getLineNumber(inlays.single().offset))
+        } finally {
+            Disposer.dispose(parent)
+            EditorFactory.getInstance().releaseEditor(editor)
+        }
+    }
 }
