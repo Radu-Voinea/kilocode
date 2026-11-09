@@ -193,6 +193,12 @@ internal class DiffEditorView(
         processor.updateRequest()
         applyBadge(start)
         applyViewed()
+        applyComments()
+        review?.let { scope ->
+            project.service<ai.kilocode.client.review.KiloReviewService>().listen(parent) { key ->
+                if (key == scope.key) applyComments()
+            }
+        }
         select(start.firstOrNull()?.file)
         listen()
     }
@@ -227,6 +233,7 @@ internal class DiffEditorView(
         Disposer.dispose(old)
         applyBadge(items)
         applyViewed()
+        applyComments()
         select(items.getOrNull(index)?.file)
         root.revalidate()
         root.repaint()
@@ -347,6 +354,26 @@ internal class DiffEditorView(
         viewedLabel.isVisible = done > 0
         tree.repaint()
     }
+
+    /** Puts each file's review comment count on its row; folders add up the files under them. */
+    @RequiresEdt
+    private fun applyComments() {
+        val root = tree.model.root as? DefaultMutableTreeNode ?: return
+        val counts: Map<String, Int> = review?.let { scope ->
+            project.service<ai.kilocode.client.review.KiloReviewService>().comments(scope).groupingBy { it.file }.eachCount()
+        } ?: emptyMap()
+        fun walk(node: DefaultMutableTreeNode): Int {
+            val item = node.userObject as? Node ?: return 0
+            val file = item.file
+            item.comments = if (file != null) counts[file.file] ?: 0
+            else (0 until node.childCount).sumOf { walk(node.getChildAt(it) as? DefaultMutableTreeNode ?: return@sumOf 0) }
+            return item.comments
+        }
+        walk(root)
+        TreeUtil.invalidateCacheAndRepaint(tree.ui)
+    }
+
+    internal fun commentsForTest(path: String): Int = (nodeForTest(path)?.userObject as? Node)?.comments ?: 0
 
     /** How many files are marked viewed, for tests. */
     internal fun viewedCount(): Int = files.count { viewedStore.viewed(params["directory"], it) }
@@ -724,6 +751,7 @@ private class Node(val name: String, val path: String, val dir: Boolean, val fil
     var additions: Int = file?.additions ?: 0
     var deletions: Int = file?.deletions ?: 0
     var viewed: Boolean = false
+    var comments: Int = 0
 }
 
 private fun leaves(node: DefaultMutableTreeNode): List<DefaultMutableTreeNode> {
@@ -797,13 +825,21 @@ private class DiffTree(model: TreeModel) : Tree(model) {
 private class Renderer : JPanel(BorderLayout()), TreeCellRenderer {
     private val check = JBLabel().apply { border = JBUI.Borders.emptyRight(GAP) }
     private val text = SimpleColoredComponent()
+    private val notes = JBLabel(AllIcons.General.Balloon).apply {
+        border = JBUI.Borders.empty(0, GAP * 2, 0, GAP)
+        foreground = UiStyle.Colors.weak()
+        iconTextGap = JBUI.scale(2)
+    }
+    private val middle = JPanel(BorderLayout())
     private val badge = DiffStatBadge(0, 0, DiffStatBadge.Variant.COMPACT)
 
     init {
-        UiStyle.Components.transparent(this, text, check)
+        UiStyle.Components.transparent(this, text, check, notes, middle)
         border = JBUI.Borders.empty(0, UiStyle.Gap.sm(), 0, UiStyle.Gap.xl())
+        middle.add(text, BorderLayout.CENTER)
+        middle.add(notes, BorderLayout.EAST)
         add(check, BorderLayout.WEST)
-        add(text, BorderLayout.CENTER)
+        add(middle, BorderLayout.CENTER)
         add(badge, BorderLayout.EAST)
     }
 
@@ -839,6 +875,11 @@ private class Renderer : JPanel(BorderLayout()), TreeCellRenderer {
         // A folder's badge rolls up its descendants' stats, which is only meaningful while the
         // folder is collapsed. Once expanded the child rows carry their own badges, so hide the
         // folder aggregate to avoid duplicating the numbers. Leaf files always show their badge.
+        // Comments roll up the same way: a folder shows its files' total only while collapsed.
+        val count = if (item == null || (item.dir && expanded)) 0 else item.comments
+        notes.isVisible = count > 0
+        notes.text = count.toString()
+        notes.toolTipText = if (count > 0) KiloBundle.message("diff.editor.comments", count) else null
         val show = item != null && (item.additions != 0 || item.deletions != 0) && !(item.dir && expanded)
         badge.isVisible = show
         if (show) badge.update(item.additions, item.deletions)

@@ -426,6 +426,32 @@ class KiloDiffEditorContentTest : BasePlatformTestCase() {
         }
     }
 
+    fun `test rows count review comments and folders add them up`() {
+        val parent = Disposer.newDisposable()
+        try {
+            val dir = project.basePath.orEmpty()
+            val scope = ai.kilocode.client.review.ReviewScope(dir, "branch")
+            val reviews = project.getService(ai.kilocode.client.review.KiloReviewService::class.java)
+            reviews.discard(scope)
+            val editor = editor(listOf(file("src/A.kt", 1, 0), file("src/B.kt", 1, 0), file("C.kt", 1, 0)), parent)
+            assertEquals(0, editor.commentsForTest("src/A.kt"))
+
+            reviews.add(scope, "src/A.kt", ai.kilocode.client.review.ReviewSide.NEW, 1, 1, "x", "one")
+            reviews.add(scope, "src/A.kt", ai.kilocode.client.review.ReviewSide.NEW, 2, 2, "y", "two")
+            reviews.add(scope, "src/B.kt", ai.kilocode.client.review.ReviewSide.OLD, 1, 1, "z", "three")
+
+            assertEquals(2, editor.commentsForTest("src/A.kt"))
+            assertEquals(1, editor.commentsForTest("src/B.kt"))
+            assertEquals(3, editor.commentsForTest("src"))
+            assertEquals(0, editor.commentsForTest("C.kt"))
+
+            reviews.discard(scope)
+            assertEquals(0, editor.commentsForTest("src"))
+        } finally {
+            Disposer.dispose(parent)
+        }
+    }
+
     fun `test folder toggle marks every file under it`() {
         val parent = Disposer.newDisposable()
         try {
