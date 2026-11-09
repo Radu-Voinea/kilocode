@@ -47,14 +47,31 @@ export const PARSING_CONCURRENCY = 10
 export const MAX_PENDING_BATCHES = 20 // Maximum number of batches to accumulate before waiting
 
 /**LanceDB maintenance */
-// Compact after this many modification operations (each upsert is a delete+add,
-// so this fires roughly every 20 upserts). LanceDB recommends optimizing after
-// ~20 modifications; keeping the backlog small avoids heavy compactions.
+// Consider compacting after this many modification operations (each upsert is a
+// delete+add). LanceDB recommends optimizing after ~20 modifications.
 export const LANCEDB_COMPACT_EVERY_WRITES = 40
+// Lance compaction rewrites every fragment below its 1M-row target together with
+// the new small fragments, which for a code index is usually the whole table. The
+// JS API does not expose the target, so only compact once the rows written since
+// the last compaction reach this share of the table. Total rewrite volume then
+// stays proportional to the table size instead of growing quadratically with it.
+export const LANCEDB_COMPACT_GROWTH = 0.5
+// Compact regardless of growth after this many modification operations, which
+// bounds fragment count and manifest size for large tables with small edits.
+export const LANCEDB_COMPACT_MAX_WRITES = 2000
+// On open, prune old versions once the bytes they pin outweigh the live table.
+export const LANCEDB_GARBAGE_MIN_BYTES = 64 * 1024 * 1024
 // Grace period before old versions may be pruned. Pruning with a zero-length
 // window (new Date()) installs an auto-cleanup that races concurrent writers and
 // logs "manifest not found"; keep recent versions available for active readers.
 export const LANCEDB_CLEANUP_RETENTION_MS = 10 * 60_000
+
+/**Stale index collection */
+// Remove indexes whose workspace directory is gone, at most once per interval.
+export const STALE_INDEX_SWEEP_INTERVAL_MS = 24 * 60 * 60_000
+// Keep an orphaned index this long after its last write, in case the workspace
+// is only temporarily missing (renamed, unmounted).
+export const STALE_INDEX_GRACE_MS = 3 * 24 * 60 * 60_000
 
 /**Manager Recovery */
 export const MAX_MANAGER_RECOVERY_ATTEMPTS = 3

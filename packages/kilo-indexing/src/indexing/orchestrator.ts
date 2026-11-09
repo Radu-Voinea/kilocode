@@ -26,6 +26,9 @@ export class CodeIndexOrchestrator {
   private _isProcessing = false
   private _cancelRequested = false
   private _active?: Promise<void>
+  // The current scan continues an interrupted one, so a cancellation must not
+  // mark the index complete.
+  private _partial = false
 
   constructor(
     private readonly configManager: CodeIndexConfigManager,
@@ -202,11 +205,16 @@ export class CodeIndexOrchestrator {
         return
       }
 
-      if (this.overlay) {
+      // A worktree delta built against the same baseline stays valid across
+      // restarts: reuse it (and its hash cache) instead of re-embedding every
+      // changed file. Interrupted delta builds resume the same way.
+      const reused = this.overlay && !collectionCreated ? await this.reusable(this.overlay) : false
+      if (this.overlay && !reused) {
         if (!collectionCreated) await this.vectorStore.clearCollection()
         await this.cacheManager.clearCacheFile()
         this.cacheManager.seedHashes(this.overlay.seed())
         await this.cacheManager.flush?.()
+        if (this.overlay.signature) await this.vectorStore.setBaseline?.(this.overlay.signature)
         log.info("seeded worktree index from shared baseline", {
           workspacePath: this.workspacePath,
           baselinePath: this.overlay.baselinePath,
@@ -214,7 +222,12 @@ export class CodeIndexOrchestrator {
         })
       }
 
-      const hasExistingData = this.overlay ? false : await this.vectorStore.hasIndexedData()
+      const complete = this.overlay ? reused : await this.vectorStore.hasIndexedData()
+      // An interrupted scan leaves its finished batches in the store and their
+      // hashes in the cache; resuming re-processes only files the cache does not
+      // cover, instead of wiping and re-embedding the whole workspace.
+      const resumed = !this.overlay && !complete && !collectionCreated ? await this.resumable() : false
+      const hasExistingData = complete || resumed
       if (!this.overlay && !hasExistingData) {
         if (!collectionCreated) await this.vectorStore.clearCollection()
         await this.cacheManager.clearCacheFile()
@@ -223,6 +236,8 @@ export class CodeIndexOrchestrator {
           collectionCreated,
         })
       }
+      if (resumed) log.info("resuming interrupted scan", { workspacePath: this.workspacePath })
+      this._partial = resumed || (reused && !(await this.vectorStore.hasIndexedData()))
       log.info("checked vector store indexed data", {
         workspacePath: this.workspacePath,
         hasExistingData,
@@ -274,9 +289,21 @@ export class CodeIndexOrchestrator {
     }
   }
 
+  private async reusable(overlay: WorktreeOverlay): Promise<boolean> {
+    if (!overlay.signature || !this.vectorStore.getBaseline) return false
+    const stored = await this.vectorStore.getBaseline()
+    return stored === overlay.signature
+  }
+
+  private async resumable(): Promise<boolean> {
+    if (!this.vectorStore.countPoints) return false
+    if (Object.keys(this.cacheManager.getAllHashes?.() ?? {}).length === 0) return false
+    return (await this.vectorStore.countPoints()) > 0
+  }
+
   private async _runScan(mode: IndexingTelemetryMode, trigger: IndexingTelemetryTrigger): Promise<void> {
     if (this._cancelRequested) {
-      if (mode === "incremental") await this.vectorStore.markIndexingComplete()
+      if (mode === "incremental" && !this._partial) await this.vectorStore.markIndexingComplete()
       this.stateManager.setSystemState("Standby", "Indexing cancelled.")
       log.info("scan skipped: cancellation was requested", { workspacePath: this.workspacePath, mode })
       return
@@ -320,7 +347,7 @@ export class CodeIndexOrchestrator {
     })
 
     if (this._cancelRequested || this.scanner.isCancelled) {
-      if (mode === "incremental" && result.stats.processed === 0 && batchErrors.length === 0) {
+      if (mode === "incremental" && !this._partial && result.stats.processed === 0 && batchErrors.length === 0) {
         await this.vectorStore.markIndexingComplete()
         log.info("preserved unchanged index after cancelled scan", { workspacePath: this.workspacePath })
       }

@@ -14,6 +14,13 @@ export interface IVectorStore {
   openExisting?(): Promise<void>
   close?(): Promise<void>
 
+  /** Number of stored points, used to resume an interrupted scan instead of wiping it. */
+  countPoints?(): Promise<number>
+
+  /** Signature of the shared baseline a worktree delta index was built against. */
+  getBaseline?(): Promise<string | undefined>
+  setBaseline?(signature: string): Promise<void>
+
   /**
    * Initializes the vector store
    * @returns Promise resolving to boolean indicating if a new collection was created

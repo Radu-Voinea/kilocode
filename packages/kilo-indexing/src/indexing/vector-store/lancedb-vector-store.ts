@@ -8,8 +8,12 @@ import {
   DEFAULT_SEARCH_MIN_SCORE,
   LANCEDB_CLEANUP_RETENTION_MS,
   LANCEDB_COMPACT_EVERY_WRITES,
+  LANCEDB_COMPACT_GROWTH,
+  LANCEDB_COMPACT_MAX_WRITES,
+  LANCEDB_GARBAGE_MIN_BYTES,
 } from "../constants"
 import fs from "fs"
+import { WORKSPACE_MARKER, size } from "../stale-indexes"
 import { Log } from "../../util/log"
 import type { EmbeddingProfile } from "../embedding-profile"
 import { loadLanceDB } from "./lancedb-loader"
@@ -43,6 +47,7 @@ const KEY = {
   provider: "embedding_provider",
   model: "embedding_model_id",
   dimension: "embedding_dimension",
+  baseline: "baseline_signature",
 }
 
 /**
@@ -58,7 +63,11 @@ export class LanceDBVectorStore implements IVectorStore {
   private readonly vectorTableName = "vector"
   private readonly metadataTableName = "metadata"
   private lancedbModule: any = null
-  private _writesSinceCompact = 0
+  // Modification operations and added rows since the last compaction, and the
+  // row count right after it (undefined until first read).
+  private ops = 0
+  private rows = 0
+  private base: number | undefined
   private compacting = false
   private compactQueued = false
   private pending: Promise<void> = Promise.resolve()
@@ -111,9 +120,25 @@ export class LanceDBVectorStore implements IVectorStore {
       const lancedb = await this.loadLanceDBModule()
 
       if (!fs.existsSync(this.dbPath)) fs.mkdirSync(this.dbPath, { recursive: true })
+      this.mark()
       this.db = await lancedb.connect(this.dbPath)
       return this.db as Connection
     })
+  }
+
+  /**
+   * Records which workspace this database belongs to, so stale-index collection
+   * can map the hashed directory name back to a path and drop it once the
+   * workspace is gone.
+   */
+  private mark(): void {
+    const file = path.join(this.dbPath, WORKSPACE_MARKER)
+    if (fs.existsSync(file)) return
+    try {
+      fs.writeFileSync(file, JSON.stringify({ workspacePath: this.workspacePath }))
+    } catch (error) {
+      log.warn("Failed to write workspace marker", { error, dbPath: this.dbPath })
+    }
   }
 
   /**
@@ -339,7 +364,6 @@ export class LanceDBVectorStore implements IVectorStore {
         await this._dropTableIfExists(db, this.metadataTableName)
         await this._createVectorTable(db)
         await this._createMetadataTable(db)
-        this.optimizeTable()
 
         log.info("LanceDB store reinitialized for embedding profile change", {
           workspacePath: this.workspacePath,
@@ -350,7 +374,7 @@ export class LanceDBVectorStore implements IVectorStore {
 
         return true
       }
-      this.optimizeTable()
+      this.queueCompact(() => this.tidy())
       log.info("LanceDB store initialized", {
         workspacePath: this.workspacePath,
         dbPath: this.dbPath,
@@ -416,7 +440,7 @@ export class LanceDBVectorStore implements IVectorStore {
       log.error("Failed to upsert points", { error })
       throw error
     }
-    this.noteWrites(2)
+    this.noteWrites(2, valids.length)
   }
 
   // Temporary till lancedb implements parameter support
@@ -562,6 +586,9 @@ export class LanceDBVectorStore implements IVectorStore {
 
       // Run optimization to clean up disk space after clearing
       await this.optimizeTable()
+      this.ops = 0
+      this.rows = 0
+      this.base = 0
     } catch (error) {
       log.error("Failed to clear collection", { error })
       throw error
@@ -605,20 +632,86 @@ export class LanceDBVectorStore implements IVectorStore {
    * manifests. Compaction runs in the background and never overlaps itself, so it
    * cannot block the write that triggered it.
    */
-  private noteWrites(ops: number): void {
-    this._writesSinceCompact += ops
-    if (this._writesSinceCompact < LANCEDB_COMPACT_EVERY_WRITES) return
-    this._writesSinceCompact = 0
+  private noteWrites(ops: number, rows = 0): void {
+    this.ops += ops
+    this.rows += rows
+    if (this.ops < LANCEDB_COMPACT_EVERY_WRITES) return
+    if (this.base !== undefined && !this.due(this.base)) return
     this.queueCompact()
   }
 
-  private queueCompact(): void {
+  /**
+   * Compaction rewrites the whole table (see LANCEDB_COMPACT_GROWTH), so it is only
+   * worth it once the writes since the last one are a real share of the table, or
+   * once enough operations piled up that fragments and manifests need folding.
+   */
+  private due(base: number): boolean {
+    return this.ops >= LANCEDB_COMPACT_MAX_WRITES || this.rows >= base * LANCEDB_COMPACT_GROWTH
+  }
+
+  private async compact(): Promise<void> {
+    try {
+      const table = await this.getTable()
+      const base = this.base ?? (await table.countRows())
+      this.base = base
+      if (this.ops < LANCEDB_COMPACT_EVERY_WRITES || !this.due(base)) return
+      this.ops = 0
+      this.rows = 0
+      await this.optimizeTable()
+      this.base = await table.countRows()
+    } catch (error) {
+      log.error("Failed to compact table", { error })
+    }
+  }
+
+  /**
+   * Runs once when an existing table is opened. Prunes old versions only when the
+   * data they pin outweighs the live table (or fragments piled up), because the
+   * prune is bundled with a compaction that rewrites the table.
+   */
+  private async tidy(): Promise<void> {
+    try {
+      // The metadata table is a handful of rows, so compacting it is cheap; it
+      // would otherwise keep every version from each scan's status updates.
+      const db = await this.getDb()
+      const meta = await native(this.dbPath, () => db.openTable(this.metadataTableName))
+      await native(this.dbPath, () => meta.optimize({ cleanupOlderThan: this.horizon(), deleteUnverified: false }))
+      const table = await this.getTable()
+      const stats = await table.stats()
+      const disk = await size(path.join(this.dbPath, `${this.vectorTableName}.lance`))
+      const waste = disk - stats.totalBytes
+      const fragments = stats.fragmentStats.numFragments
+      this.base = stats.numRows
+      log.info("LanceDB table usage", {
+        dbPath: this.dbPath,
+        rows: stats.numRows,
+        live: stats.totalBytes,
+        disk,
+        fragments,
+      })
+      if (waste < Math.max(stats.totalBytes, LANCEDB_GARBAGE_MIN_BYTES) && fragments < LANCEDB_COMPACT_MAX_WRITES / 2)
+        return
+      await this.optimizeTable()
+      this.base = await table.countRows()
+    } catch (error) {
+      log.error("Failed to tidy table", { error })
+    }
+  }
+
+  private horizon(): Date {
+    // Keep recent versions so concurrent readers/writers never reference a
+    // manifest that was just pruned. A zero-length window (new Date()) makes
+    // every subsequent commit run an auto-cleanup that races other processes.
+    return new Date(Date.now() - LANCEDB_CLEANUP_RETENTION_MS)
+  }
+
+  private queueCompact(task = () => this.compact()): void {
     if (this.compacting) {
       this.compactQueued = true
       return
     }
     this.compacting = true
-    this.pending = this.optimizeTable().finally(() => {
+    this.pending = task().finally(() => {
       this.compacting = false
       if (this.compactQueued) {
         this.compactQueued = false
@@ -638,10 +731,7 @@ export class LanceDBVectorStore implements IVectorStore {
 
       await native(this.dbPath, () =>
         table.optimize({
-          // Keep recent versions so concurrent readers/writers never reference a
-          // manifest that was just pruned. A zero-length window (new Date()) makes
-          // every subsequent commit run an auto-cleanup that races other processes.
-          cleanupOlderThan: new Date(Date.now() - LANCEDB_CLEANUP_RETENTION_MS),
+          cleanupOlderThan: this.horizon(),
           deleteUnverified: false,
         }),
       )
@@ -697,6 +787,25 @@ export class LanceDBVectorStore implements IVectorStore {
     await this._upsertMetadata(metadataTable, KEY.model, this.profile.modelId)
     await this._upsertMetadata(metadataTable, KEY.dimension, this.profile.dimension)
     await this._upsertMetadata(metadataTable, KEY.size, this.vectorSize)
+  }
+
+  async countPoints(): Promise<number> {
+    const table = await this.getTable()
+    return table.countRows()
+  }
+
+  async getBaseline(): Promise<string | undefined> {
+    const db = await this.getDb()
+    const tables = await db.tableNames()
+    if (!tables.includes(this.metadataTableName)) return undefined
+    const value = await this._getMetadataValue(db, KEY.baseline)
+    return typeof value === "string" ? value : undefined
+  }
+
+  async setBaseline(signature: string): Promise<void> {
+    const db = await this.getDb()
+    const meta = await native(this.dbPath, () => db.openTable(this.metadataTableName))
+    await this._upsertMetadata(meta, KEY.baseline, signature)
   }
 
   /**

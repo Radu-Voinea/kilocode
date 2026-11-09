@@ -14,6 +14,7 @@ import type {
   VectorStoreSearchResult,
 } from "../../../src/indexing/interfaces"
 import { Emitter } from "../../../src/indexing/runtime"
+import { WorktreeOverlay } from "../../../src/indexing/worktree-overlay"
 
 class Store {
   public clearCount = 0
@@ -389,5 +390,131 @@ describe("CodeIndexOrchestrator telemetry", () => {
     expect(store.clearCount).toBe(0)
     expect(store.deleteCount).toBe(0)
     expect(orchestrator.state).toBe("Error")
+  })
+
+  describe("restarts", () => {
+    function cache(hashes: Record<string, string> = {}) {
+      return {
+        clears: 0,
+        seeds: 0,
+        async clearCacheFile() {
+          this.clears += 1
+        },
+        seedHashes() {
+          this.seeds += 1
+        },
+        async flush() {},
+        getAllHashes() {
+          return hashes
+        },
+      }
+    }
+
+    class Delta extends Store {
+      public baseline: string | undefined
+      public points = 0
+      async getBaseline() {
+        return this.baseline
+      }
+      async setBaseline(signature: string) {
+        this.baseline = signature
+      }
+      async countPoints() {
+        return this.points
+      }
+    }
+
+    function run(store: Store, hashes: ReturnType<typeof cache>, overlay?: WorktreeOverlay) {
+      const events: IndexingTelemetryEvent[] = []
+      const orchestrator = new CodeIndexOrchestrator(
+        createConfig(),
+        new CodeIndexStateManager(),
+        "/tmp/ws",
+        hashes as unknown as CacheManager,
+        store as unknown as IVectorStore,
+        new Scanner(2, 1, 2) as unknown as DirectoryScanner,
+        new Watcher() as unknown as IFileWatcher,
+        (event) => events.push(event),
+        overlay,
+      )
+      return orchestrator.startIndexing("background").then(() => ({ orchestrator, events }))
+    }
+
+    const mode = (events: IndexingTelemetryEvent[]) =>
+      events.find(
+        (event): event is Extract<IndexingTelemetryEvent, { type: "completed" }> => event.type === "completed",
+      )?.mode
+
+    test("reuses a worktree delta built against the same baseline", async () => {
+      const store = new Delta(true)
+      store.baseline = "sig"
+      const hashes = cache({ "/tmp/ws/a.ts": "a" })
+      const result = await run(store, hashes, new WorktreeOverlay("/tmp/ws", "/tmp/base", new Map(), "sig"))
+
+      expect(store.clearCount).toBe(0)
+      expect(hashes.clears).toBe(0)
+      expect(hashes.seeds).toBe(0)
+      expect(mode(result.events)).toBe("incremental")
+      expect(result.orchestrator.state).toBe("Indexed")
+    })
+
+    test("rebuilds the worktree delta when the baseline changed", async () => {
+      const store = new Delta(true)
+      store.baseline = "old"
+      const hashes = cache()
+      const result = await run(store, hashes, new WorktreeOverlay("/tmp/ws", "/tmp/base", new Map(), "new"))
+
+      expect(store.clearCount).toBe(1)
+      expect(hashes.clears).toBe(1)
+      expect(hashes.seeds).toBe(1)
+      expect(store.baseline).toBe("new")
+      expect(mode(result.events)).toBe("full")
+    })
+
+    test("resumes an interrupted scan instead of wiping the index", async () => {
+      const store = new Delta(false)
+      store.points = 120
+      const hashes = cache({ "/tmp/ws/a.ts": "a" })
+      const result = await run(store, hashes)
+
+      expect(store.clearCount).toBe(0)
+      expect(hashes.clears).toBe(0)
+      expect(mode(result.events)).toBe("incremental")
+      expect(store.completeCount).toBe(1)
+    })
+
+    test("rebuilds an incomplete index whose hash cache is gone", async () => {
+      const store = new Delta(false)
+      store.points = 120
+      const hashes = cache()
+      const result = await run(store, hashes)
+
+      expect(store.clearCount).toBe(1)
+      expect(hashes.clears).toBe(1)
+      expect(mode(result.events)).toBe("full")
+    })
+
+    test("does not mark a resumed scan complete when it is cancelled", async () => {
+      const scanner = new BlockingScanner()
+      const store = new Delta(false)
+      store.points = 120
+      const orchestrator = new CodeIndexOrchestrator(
+        createConfig(),
+        new CodeIndexStateManager(),
+        "/tmp/ws",
+        cache({ "/tmp/ws/a.ts": "a" }) as unknown as CacheManager,
+        store as unknown as IVectorStore,
+        scanner as unknown as DirectoryScanner,
+        new Watcher() as unknown as IFileWatcher,
+      )
+
+      const active = orchestrator.startIndexing("background")
+      await scanner.started.promise
+      await orchestrator.shutdown()
+      await active
+
+      expect(store.clearCount).toBe(0)
+      expect(store.completeCount).toBe(0)
+    })
   })
 })

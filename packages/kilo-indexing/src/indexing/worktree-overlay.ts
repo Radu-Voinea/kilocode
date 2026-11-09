@@ -14,6 +14,9 @@ export class WorktreeOverlay {
     readonly workspacePath: string,
     readonly baselinePath: string,
     readonly baseline: ReadonlyMap<string, string>,
+    // Signature of the baseline hash cache; a delta index built against the same
+    // signature is still valid and can be reused across restarts.
+    readonly signature?: string,
   ) {}
 
   relative(filePath: string): string | undefined {

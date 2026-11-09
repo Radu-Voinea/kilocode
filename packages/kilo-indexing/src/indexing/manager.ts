@@ -14,6 +14,7 @@ import { Log } from "../util/log"
 import { loadIgnore } from "./shared/load-ignore"
 import { sanitizeErrorMessage } from "./shared/validation-helpers"
 import { WorktreeOverlay } from "./worktree-overlay"
+import { sweepInBackground } from "./stale-indexes"
 
 const log = Log.create({ service: "indexing-manager" })
 const BASELINE_CHECK_INTERVAL = 1_000
@@ -327,6 +328,14 @@ export class CodeIndexManager {
       log.info("indexing cache initialized", { cacheDirectory: this.cacheDirectory })
     }
 
+    sweepInBackground({
+      cacheDirectory: this.cacheDirectory,
+      lancedbDirectory:
+        this._configManager.getConfig().lancedbVectorStoreDirectoryPlaceholder ??
+        path.join(this.cacheDirectory, "lancedb"),
+      keep: [this.workspacePath, ...(this.baselinePath ? [this.baselinePath] : [])],
+    })
+
     const needsServiceRecreation = !this._serviceFactory || requiresRestart
     log.info("evaluated indexing service lifecycle", {
       needsServiceRecreation,
@@ -543,7 +552,7 @@ export class CodeIndexManager {
         store,
         signature,
         stamp,
-        overlay: new WorktreeOverlay(this.workspacePath, this.baselinePath, hashes),
+        overlay: new WorktreeOverlay(this.workspacePath, this.baselinePath, hashes, signature),
       }
     } catch (err) {
       await store.close?.()

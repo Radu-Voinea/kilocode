@@ -3,10 +3,16 @@
  * All LanceDB and fs operations are mocked.
  */
 
-import { describe, test, expect, beforeEach, afterEach, mock, spyOn } from "bun:test"
+import { describe, test, expect, beforeEach, afterEach, afterAll, mock, spyOn } from "bun:test"
 import type { Payload } from "../../../../src/indexing/interfaces"
-import { LANCEDB_CLEANUP_RETENTION_MS, LANCEDB_COMPACT_EVERY_WRITES } from "../../../../src/indexing/constants"
+import {
+  LANCEDB_CLEANUP_RETENTION_MS,
+  LANCEDB_COMPACT_EVERY_WRITES,
+  LANCEDB_COMPACT_MAX_WRITES,
+  LANCEDB_GARBAGE_MIN_BYTES,
+} from "../../../../src/indexing/constants"
 import * as path from "path"
+import os from "os"
 import fs from "fs"
 
 const mockTable = {
@@ -17,6 +23,7 @@ const mockTable = {
   toArray: mock().mockResolvedValue([]),
   countRows: mock().mockResolvedValue(0),
   optimize: mock().mockResolvedValue({}),
+  stats: mock().mockResolvedValue({}),
   vectorSearch: mock().mockReturnThis(),
   limit: mock().mockReturnThis(),
   refineFactor: mock().mockReturnThis(),
@@ -85,6 +92,7 @@ const allMocks = [
   mockTable.toArray,
   mockTable.countRows,
   mockTable.optimize,
+  mockTable.stats,
   mockTable.vectorSearch,
   mockTable.limit,
   mockTable.refineFactor,
@@ -161,6 +169,12 @@ describe("LocalVectorStore", () => {
 
   afterEach(async () => {
     await store["closeConnect"]()
+  })
+
+  afterAll(async () => {
+    // Stores that reach the real fs create their database directory (and
+    // workspace marker) under the relative dbDirectory; fs.rmSync is stubbed.
+    await fs.promises.rm(path.resolve(dbDirectory), { recursive: true, force: true })
   })
 
   describe("constructor", () => {
@@ -450,7 +464,7 @@ describe("LocalVectorStore", () => {
     })
 
     test("schedules compaction once the write budget is reached", async () => {
-      store["_writesSinceCompact"] = LANCEDB_COMPACT_EVERY_WRITES - 2
+      store["ops"] = LANCEDB_COMPACT_EVERY_WRITES - 2
       await store.upsertPoints([point()])
       await store["pending"]
 
@@ -465,7 +479,7 @@ describe("LocalVectorStore", () => {
     })
 
     test("does not block the write path while compaction is pending", async () => {
-      store["_writesSinceCompact"] = LANCEDB_COMPACT_EVERY_WRITES - 2
+      store["ops"] = LANCEDB_COMPACT_EVERY_WRITES - 2
       const gate = Promise.withResolvers<void>()
       mockTable.optimize.mockImplementation(() => gate.promise)
 
@@ -482,12 +496,12 @@ describe("LocalVectorStore", () => {
       const gate = Promise.withResolvers<void>()
       mockTable.optimize.mockImplementation(() => gate.promise)
 
-      store["_writesSinceCompact"] = LANCEDB_COMPACT_EVERY_WRITES - 2
+      store["ops"] = LANCEDB_COMPACT_EVERY_WRITES - 2
       await store.upsertPoints([point()])
       await Bun.sleep(0)
       expect(mockTable.optimize).toHaveBeenCalledTimes(1)
 
-      store["_writesSinceCompact"] = LANCEDB_COMPACT_EVERY_WRITES - 2
+      store["ops"] = LANCEDB_COMPACT_EVERY_WRITES - 2
       store["noteWrites"](2)
       await Bun.sleep(0)
       expect(mockTable.optimize).toHaveBeenCalledTimes(1)
@@ -508,15 +522,16 @@ describe("LocalVectorStore", () => {
         return runs === 1 ? first.promise : second.promise
       })
 
-      store["_writesSinceCompact"] = LANCEDB_COMPACT_EVERY_WRITES - 2
+      store["ops"] = LANCEDB_COMPACT_EVERY_WRITES - 2
       const point = {
         id: "123e4567-e89b-12d3-a456-426614174000",
         vector: [1, 2, 3],
         payload: { filePath: "src/a.ts", fileHash: "hash", codeChunk: "code", startLine: 1, endLine: 2 },
       }
       await store.upsertPoints([point])
+      await Bun.sleep(0)
       // Cross the threshold again while the first compaction is still running.
-      store["_writesSinceCompact"] = LANCEDB_COMPACT_EVERY_WRITES - 2
+      store["ops"] = LANCEDB_COMPACT_EVERY_WRITES - 2
       store["noteWrites"](2)
 
       const closed = store.close()
@@ -533,6 +548,151 @@ describe("LocalVectorStore", () => {
       second.resolve()
       await closed
       expect(mockDb.close).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe("growth-based compaction", () => {
+    const points = (count: number) =>
+      Array.from({ length: count }, (_, i) => ({
+        id: `123e4567-e89b-12d3-a456-${String(i).padStart(12, "0")}`,
+        vector: [1, 2, 3],
+        payload: { filePath: "src/a.ts", fileHash: "hash", codeChunk: "code", startLine: 1, endLine: 2 },
+      }))
+
+    test("skips compaction while new rows are a small share of a large table", async () => {
+      mockTable.countRows.mockResolvedValue(100_000)
+      for (let i = 0; i < LANCEDB_COMPACT_EVERY_WRITES; i += 1) await store.upsertPoints(points(60))
+      await store["pending"]
+
+      expect(mockTable.optimize).not.toHaveBeenCalled()
+      // Counters keep accumulating towards the next decision.
+      expect(store["ops"]).toBe(LANCEDB_COMPACT_EVERY_WRITES * 2)
+    })
+
+    test("compacts once new rows reach half of the table", async () => {
+      mockTable.countRows.mockResolvedValue(1_000)
+      store["base"] = 1_000
+      await store.upsertPoints(points(60))
+      store["ops"] = LANCEDB_COMPACT_EVERY_WRITES
+      store["rows"] = 499
+      store["noteWrites"](0)
+      await store["pending"]
+      expect(mockTable.optimize).not.toHaveBeenCalled()
+
+      store["noteWrites"](0, 1)
+      await store["pending"]
+      expect(mockTable.optimize).toHaveBeenCalledTimes(1)
+      expect(store["ops"]).toBe(0)
+      expect(store["rows"]).toBe(0)
+    })
+
+    test("compacts after the write cap even when the table barely grew", async () => {
+      store["base"] = 1_000_000
+      store["ops"] = LANCEDB_COMPACT_MAX_WRITES - 1
+      store["noteWrites"](1)
+      await store["pending"]
+
+      expect(mockTable.optimize).toHaveBeenCalledTimes(1)
+    })
+
+    test("bounds rewrite volume to a small multiple of the final table size", async () => {
+      // Every compaction rewrites the whole table. Simulate a full scan of 60-row
+      // batches and sum the rows each compaction rewrites.
+      let rows = 0
+      let rewritten = 0
+      mockTable.countRows.mockImplementation(async () => rows)
+      mockTable.optimize.mockImplementation(async () => {
+        rewritten += rows
+        return {}
+      })
+      for (let i = 0; i < 2_000; i += 1) {
+        rows += 60
+        await store.upsertPoints(points(60))
+        await store["pending"]
+      }
+
+      expect(mockTable.optimize.mock.calls.length).toBeGreaterThan(0)
+      expect(rewritten).toBeLessThan(rows * 4)
+    })
+  })
+
+  describe("tidy on open", () => {
+    let dir: string
+
+    beforeEach(() => {
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), "kilo-lancedb-tidy-"))
+      store = new LanceDBVectorStore(workspacePath, vectorSize, dir)
+      // @ts-ignore
+      store.lancedbModule = mockLanceDBModule
+      // @ts-ignore
+      store.db = mockDb
+      // @ts-ignore
+      store.table = mockTable
+    })
+
+    afterEach(() => {
+      fs.rmSync(dir, { recursive: true, force: true })
+    })
+
+    const stats = (live: number, fragments = 1) => ({
+      totalBytes: live,
+      numRows: 10,
+      numIndices: 0,
+      fragmentStats: { numFragments: fragments, numSmallFragments: fragments },
+    })
+
+    test("does not rewrite a table without much garbage", async () => {
+      mockTable.stats.mockResolvedValue(stats(1_000))
+      await store["tidy"]()
+
+      // Only the tiny metadata table is compacted.
+      expect(mockTable.optimize).toHaveBeenCalledTimes(1)
+      expect(store["base"]).toBe(10)
+    })
+
+    test("prunes old versions once they pin more bytes than the live table", async () => {
+      const data = path.join(store["dbPath"], "vector.lance", "data")
+      fs.mkdirSync(data, { recursive: true })
+      // Sparse file: reports the size without using the disk.
+      const file = path.join(data, "old.lance")
+      fs.writeFileSync(file, "")
+      fs.truncateSync(file, LANCEDB_GARBAGE_MIN_BYTES * 2)
+      mockTable.stats.mockResolvedValue(stats(1_000))
+      await store["tidy"]()
+
+      // The small metadata table plus the vector table.
+      expect(mockTable.optimize).toHaveBeenCalledTimes(2)
+    })
+
+    test("compacts when fragments piled up", async () => {
+      mockTable.stats.mockResolvedValue(stats(1_000, LANCEDB_COMPACT_MAX_WRITES))
+      await store["tidy"]()
+
+      expect(mockTable.optimize).toHaveBeenCalledTimes(2)
+    })
+
+    test("records the workspace path next to the tables", async () => {
+      // Earlier tests leave fs.existsSync stubbed to true.
+      ;(fs.existsSync as unknown as { mockRestore?: () => void }).mockRestore?.()
+      // @ts-ignore
+      store.db = null
+      await store["getDb"]()
+
+      const marker = JSON.parse(fs.readFileSync(path.join(store["dbPath"], "workspace.json"), "utf-8"))
+      expect(marker.workspacePath).toBe(workspacePath)
+      // Restore the stub so later tests keep using the mocked database paths.
+      spyOn(fs, "existsSync").mockReturnValue(true as any)
+    })
+  })
+
+  describe("baseline signature", () => {
+    test("reads and writes the baseline signature in metadata", async () => {
+      mockTable.toArray.mockResolvedValue([{ key: "baseline_signature", value: "sig" }])
+      expect(await store.getBaseline()).toBe("sig")
+
+      await store.setBaseline("next")
+      expect(mockTable.delete).toHaveBeenCalledWith("key = 'baseline_signature'")
+      expect(mockTable.add).toHaveBeenCalledWith([{ key: "baseline_signature", value: "next" }])
     })
   })
 
