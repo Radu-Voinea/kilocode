@@ -48,6 +48,12 @@ internal class ReviewEditorBinding(
     private var anchor = -1
     private var dragged = false
     private var skipClick = false
+    // The lines a "+" press covers, read when the button goes down: the gutter press clears the
+    // editor selection before the click lands, which would shrink a selected range to one line.
+    private var pressed: Pair<Int, Int>? = null
+    // The latest whole-line range the user selected, and when, for presses that see it already cleared.
+    private var selected: Pair<Int, Int>? = null
+    private var selectedAt = 0L
 
     init {
         Disposer.register(parent, this)
@@ -74,6 +80,7 @@ internal class ReviewEditorBinding(
                 if (mouse.button != java.awt.event.MouseEvent.BUTTON1 || mouse.isPopupTrigger) return
                 val line = event.logicalPosition.line
                 if (line != hoverLine) return
+                pressed = range(line)
                 anchor = line
                 dragged = false
             }
@@ -81,12 +88,25 @@ internal class ReviewEditorBinding(
             override fun mouseReleased(event: EditorMouseEvent) {
                 if (anchor < 0) return
                 val start = anchor
+                val range = pressed
                 anchor = -1
-                if (!dragged) return
-                val end = event.logicalPosition.line
+                pressed = null
                 skipClick = true
-                startDraft(minOf(start, end), maxOf(start, end))
+                if (dragged) {
+                    val end = event.logicalPosition.line
+                    startDraft(minOf(start, end), maxOf(start, end))
+                } else {
+                    val (first, last) = range ?: (start to start)
+                    startDraft(first, last)
+                }
                 event.consume()
+            }
+        }, this)
+        editor.selectionModel.addSelectionListener(object : com.intellij.openapi.editor.event.SelectionListener {
+            override fun selectionChanged(e: com.intellij.openapi.editor.event.SelectionEvent) {
+                if (!editor.selectionModel.hasSelection()) return
+                selected = selectionLines()
+                selectedAt = System.currentTimeMillis()
             }
         }, this)
         // The unified view fills its editor after the diff computes; cards and mappings follow it.
@@ -239,23 +259,38 @@ internal class ReviewEditorBinding(
 
     internal companion object {
         val KEY: com.intellij.openapi.util.Key<ReviewEditorBinding> = com.intellij.openapi.util.Key.create("kilo.review.binding")
+        private const val RECENT_MS = 1_500L
     }
 
-    /** First and last editor lines of the selection when it covers [line], else just [line]. */
-    private fun range(line: Int): Pair<Int, Int> {
+    /**
+     * First and last editor lines of the selection when it covers [line], else just [line]. A selection the
+     * gutter press cleared a moment ago still counts.
+     */
+    internal fun range(line: Int): Pair<Int, Int> {
+        val lines = if (editor.selectionModel.hasSelection()) selectionLines()
+        else selected?.takeIf { System.currentTimeMillis() - selectedAt < RECENT_MS }
+        if (lines == null) return line to line
+        val (first, last) = lines
+        return if (line in first..last) first to last else line to line
+    }
+
+    private fun selectionLines(): Pair<Int, Int> {
         val model = editor.selectionModel
-        if (!model.hasSelection()) return line to line
         val doc = editor.document
         val first = doc.getLineNumber(model.selectionStart)
         var last = doc.getLineNumber(model.selectionEnd)
         if (last > first && model.selectionEnd == doc.getLineStartOffset(last)) last -= 1
-        return if (line in first..last) first to last else line to line
+        return first to last
     }
 
     private inner class AddIcon(private val line: Int) : GutterIconRenderer() {
         override fun getIcon(): Icon = AllIcons.General.Add
 
-        override fun getTooltipText(): String = KiloBundle.message("review.gutter.add")
+        override fun getTooltipText(): String {
+            val (first, last) = range(line)
+            if (first == last) return KiloBundle.message("review.gutter.add")
+            return KiloBundle.message("review.gutter.addRange", first + 1, last + 1)
+        }
 
         override fun isNavigateAction(): Boolean = true
 

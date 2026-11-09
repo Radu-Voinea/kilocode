@@ -177,4 +177,21 @@ class KiloReviewServiceTest : BasePlatformTestCase() {
             EditorFactory.getInstance().releaseEditor(editor)
         }
     }
+
+    fun `test the plus covers a selection even after the gutter press clears it`() {
+        val doc = EditorFactory.getInstance().createDocument("a\nb\nc\nd\n")
+        val editor = EditorFactory.getInstance().createViewer(doc, project) as EditorEx
+        val parent = Disposer.newDisposable(testRootDisposable, "selection")
+        try {
+            val binding = ReviewEditorBinding(project, SideSurface(editor, scope, "src/Sel.kt", ReviewSide.NEW, null), parent)
+            editor.selectionModel.setSelection(doc.getLineStartOffset(1) + 1, doc.getLineEndOffset(2))
+            assertEquals(1 to 2, binding.range(1))
+            editor.selectionModel.removeSelection()
+            assertEquals(1 to 2, binding.range(2))
+            assertEquals(3 to 3, binding.range(3))
+        } finally {
+            Disposer.dispose(parent)
+            EditorFactory.getInstance().releaseEditor(editor)
+        }
+    }
 }
