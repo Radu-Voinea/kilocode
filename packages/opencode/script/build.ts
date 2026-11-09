@@ -118,8 +118,18 @@ async function copyKiloConsole(input: string, outputDir: string) {
   console.log(`copied Kilo Console assets to ${target}`)
 }
 
-function smokeEnv(root: string) {
+// kilocode_change start
+// The build may itself run on a Kilo binary in Bun mode (BUN_BE_BUN=1, e.g. a `bun` wrapper
+// around ~/.kilo/bin/kilo). Never pass that on to the binary under test, or it starts as Bun.
+function withoutBunMode() {
   const env = { ...process.env }
+  delete env.BUN_BE_BUN
+  return env
+}
+
+function smokeEnv(root: string) {
+  const env = withoutBunMode()
+  // kilocode_change end
   delete env.KILO_MODELS_PATH
   delete env.KILO_MODELS_URL
   delete env.KILO_CONFIG
@@ -410,7 +420,7 @@ for (const item of targets) {
     const binaryPath = `dist/${name}/bin/kilo` // kilocode_change
     console.log(`Running smoke test: ${binaryPath} --version`)
     try {
-      const versionOutput = await $`${binaryPath} --version`.text()
+      const versionOutput = await $`${binaryPath} --version`.env(withoutBunMode()).text() // kilocode_change
       console.log(`Smoke test passed: ${versionOutput.trim()}`)
       // kilocode_change start
       console.log(`Running smoke test: ${binaryPath} --pure models anthropic`)
