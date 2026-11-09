@@ -328,6 +328,13 @@ class KiloWorkspaceRpcApiImpl internal constructor(
             GitComparison.commits(dir, limit.coerceIn(1, 200))
         }
 
+    override suspend fun commit(directory: String, message: String, files: List<String>): ai.kilocode.rpc.dto.CommitResultDto =
+        withContext(Dispatchers.IO) {
+            val dir = file(clean(directory) ?: directory)
+                ?: return@withContext ai.kilocode.rpc.dto.CommitResultDto(false, error = "Not a directory: $directory")
+            GitComparison.commit(dir, message, files)
+        }
+
     override suspend fun branchName(directory: String): String? = withContext(Dispatchers.IO) {
         val base = file(clean(directory) ?: directory) ?: return@withContext null
         if (!gitAvailable(base)) return@withContext null

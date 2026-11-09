@@ -171,6 +171,15 @@ class FakeWorkspaceRpcApi : KiloWorkspaceRpcApi {
         return rangeDiffs["$from|$uncommitted"].orEmpty()
     }
 
+    val commitCalls = mutableListOf<Triple<String, String, List<String>>>()
+    var commitResult = ai.kilocode.rpc.dto.CommitResultDto(true, sha = "abc1234")
+
+    override suspend fun commit(directory: String, message: String, files: List<String>): ai.kilocode.rpc.dto.CommitResultDto {
+        assertNotEdt("commit")
+        commitCalls.add(Triple(directory, message, files))
+        return commitResult
+    }
+
     override suspend fun branchCommits(directory: String, limit: Int): List<ai.kilocode.rpc.dto.CommitDto> {
         assertNotEdt("branchCommits")
         return commits.take(limit)

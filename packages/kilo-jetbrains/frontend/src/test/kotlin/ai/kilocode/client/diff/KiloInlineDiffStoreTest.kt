@@ -99,6 +99,49 @@ class KiloInlineDiffStoreTest : BasePlatformTestCase() {
         assertEquals(KiloBundle.message("diff.scope.last", "bbbbbbb second"), scopeLabel(bar.choices()[2]))
     }
 
+    fun `test commit dialog lists uncommitted files, asks kilo for a message and commits the included ones`() {
+        workspace.localDiffs += listOf(file("src/A.kt", 2, 1), file("src/B.kt", 1, 0))
+        session.commitMessage = "feat: add things"
+        var committed: String? = null
+        val dialog = DiffCommitDialog(project, "/repo", coroutines.scope) { committed = it }
+        try {
+            waitFor { dialog.messageText() == "feat: add things" }
+            assertEquals(listOf("src/A.kt", "src/B.kt"), dialog.filesForTest())
+            assertEquals(Triple("/repo", listOf("src/A.kt", "src/B.kt"), null), session.commitMessages.single())
+
+            dialog.include("src/B.kt", false)
+            session.commitMessage = "feat: only A"
+            dialog.generate()
+            waitFor { dialog.messageText() == "feat: only A" }
+            assertEquals(Triple("/repo", listOf("src/A.kt"), "feat: add things"), session.commitMessages.last())
+
+            dialog.setMessage("fix: edited by hand")
+            dialog.commitForTest()
+            waitFor { committed != null }
+            assertEquals(Triple("/repo", "fix: edited by hand", listOf("src/A.kt")), workspace.commitCalls.single())
+            assertEquals("abc1234", committed)
+        } finally {
+            if (!dialog.isDisposed) com.intellij.openapi.util.Disposer.dispose(dialog.disposable)
+        }
+    }
+
+    fun `test a failed commit keeps the dialog open`() {
+        workspace.localDiffs += listOf(file("src/A.kt", 2, 1))
+        workspace.commitResult = ai.kilocode.rpc.dto.CommitResultDto(false, error = "hook rejected")
+        var committed = false
+        val dialog = DiffCommitDialog(project, "/repo", coroutines.scope) { committed = true }
+        try {
+            waitFor { dialog.messageText().isNotBlank() }
+            dialog.commitForTest()
+            waitFor { workspace.commitCalls.isNotEmpty() }
+            UIUtil.dispatchAllInvocationEvents()
+            assertFalse(committed)
+            assertFalse(dialog.isDisposed)
+        } finally {
+            if (!dialog.isDisposed) com.intellij.openapi.util.Disposer.dispose(dialog.disposable)
+        }
+    }
+
     private fun waitFor(condition: () -> Boolean) {
         val end = System.currentTimeMillis() + 5_000
         while (!condition() && System.currentTimeMillis() < end) {

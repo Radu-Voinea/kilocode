@@ -98,11 +98,24 @@ internal object KiloDiffEditorKind : KiloEditorKind {
             panel.repaint()
         }
         if (params["source"] == "branch" || params["source"] == "local") {
-            val bar = DiffScopeBar(params, service.scope, parent) { from, uncommitted ->
-                params = params + mapOf("from" to from, "uncommitted" to uncommitted.toString())
-                render(DiffEditorData.Connecting)
-                service.refresh(params, ::render)
-            }
+            var bar: DiffScopeBar? = null
+            bar = DiffScopeBar(
+                params,
+                service.scope,
+                parent,
+                changed = { from, uncommitted ->
+                    params = params + mapOf("from" to from, "uncommitted" to uncommitted.toString())
+                    render(DiffEditorData.Connecting)
+                    service.refresh(params, ::render)
+                },
+                commit = {
+                    val dir = params["directory"].orEmpty()
+                    DiffCommitDialog(project, dir, service.scope) {
+                        bar?.reload()
+                        service.refresh(params, ::render)
+                    }.show()
+                },
+            )
             outer.add(bar.component, BorderLayout.NORTH)
         }
         service.load(params, parent, ::render)

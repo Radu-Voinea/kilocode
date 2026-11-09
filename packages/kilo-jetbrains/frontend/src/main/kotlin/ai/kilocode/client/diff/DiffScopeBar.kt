@@ -72,6 +72,7 @@ internal class DiffScopeBar(
     params: Map<String, String>,
     private val cs: CoroutineScope,
     parent: Disposable,
+    private val commit: (() -> Unit)? = null,
     private val changed: (String, Boolean) -> Unit,
 ) {
     private val directory = params["directory"].orEmpty()
@@ -85,6 +86,14 @@ internal class DiffScopeBar(
     }
     private val working = JBCheckBox(KiloBundle.message("diff.scope.includeUncommitted"))
     private var syncing = false
+    private var job: kotlinx.coroutines.Job? = null
+    internal val commitButton = javax.swing.JButton(
+        KiloBundle.message("diff.commit.button"),
+        com.intellij.icons.AllIcons.Actions.Commit,
+    ).apply {
+        toolTipText = KiloBundle.message("diff.commit.button.tooltip")
+        addActionListener { commit?.invoke() }
+    }
 
     // One row that never wraps: long commit subjects would otherwise make the combo wider than the editor,
     // push it onto a second FlowLayout row the panel height does not account for, and clip it.
@@ -104,7 +113,11 @@ internal class DiffScopeBar(
         add(combo, c.apply { gridx = 1; insets = java.awt.Insets(0, 0, 0, gap) })
         add(working, c.apply { gridx = 2; insets = java.awt.Insets(0, 0, 0, 0) })
         add(JPanel().apply { isOpaque = false }, c.apply { gridx = 3; weightx = 1.0; fill = java.awt.GridBagConstraints.HORIZONTAL })
+        if (commit != null) {
+            add(commitButton, c.apply { gridx = 4; weightx = 0.0; fill = java.awt.GridBagConstraints.NONE })
+        }
     }
+
 
     init {
         val initial = when {
@@ -123,7 +136,14 @@ internal class DiffScopeBar(
             emit()
         }
         working.addActionListener { if (!syncing) emit() }
-        val job = cs.launch {
+        reload()
+        Disposer.register(parent) { job?.cancel() }
+    }
+
+    /** Re-reads the branch commits, e.g. after a commit adds one. */
+    internal fun reload() {
+        job?.cancel()
+        job = cs.launch {
             val commits = runCatching { service<KiloWorkspaceService>().branchCommits(directory) }
                 .getOrElse {
                     if (it is CancellationException) throw it
@@ -132,7 +152,6 @@ internal class DiffScopeBar(
                 }
             withContext(Dispatchers.Main) { fill(commits, selected()) }
         }
-        Disposer.register(parent) { job.cancel() }
     }
 
     internal fun selected(): DiffScope = combo.selectedItem as? DiffScope ?: DiffScope.Branch

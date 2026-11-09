@@ -392,6 +392,34 @@ class BranchLocalDiffTest {
         assertEquals(7, commits.first().short.length.coerceAtMost(7))
     }
 
+    @Test
+    fun `commit stages and commits the chosen files only and reports git failures`() = runBlocking {
+        init()
+        // The plugin runs plain git, so keep the user's signing and hooks out through the repo config.
+        git(repo, "config", "commit.gpgsign", "false")
+        git(repo, "config", "core.hooksPath", hooks.toString())
+        val dir = worktree()
+        Files.writeString(dir.resolve("tracked.txt"), "one\nchanged\nthree\n")
+        Files.writeString(dir.resolve("new.txt"), "new\n")
+        Files.writeString(dir.resolve("later.txt"), "later\n")
+
+        val done = api.commit(dir.toString(), "feat: pick two\n\nbody", listOf("tracked.txt", "new.txt"))
+        assertTrue(done.ok, done.error)
+        assertNotNull(done.sha)
+        assertEquals("feat: pick two", git(dir, "log", "-1", "--format=%s").trim())
+        assertEquals(listOf("later.txt"), api.localDiff(dir.toString(), patches = false).map { it.file })
+
+        assertFalse(api.commit(dir.toString(), "  ", emptyList()).ok)
+        assertFalse(api.commit(dir.toString(), "escape", listOf("../outside.txt")).ok)
+
+        val all = api.commit(dir.toString(), "chore: rest", emptyList())
+        assertTrue(all.ok, all.error)
+        assertTrue(api.localDiff(dir.toString(), patches = false).isEmpty())
+        val empty = api.commit(dir.toString(), "nothing", emptyList())
+        assertFalse(empty.ok)
+        assertTrue(empty.error.orEmpty().isNotBlank())
+    }
+
     private fun init() {
         git(repo, "init", "--initial-branch=main")
         git(repo, "config", "user.email", "test@kilo.ai")

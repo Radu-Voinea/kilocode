@@ -80,6 +80,12 @@ interface KiloWorkspaceRpcApi : RemoteApi<Unit> {
     /** Commits on the current branch since the default branch, newest first, at most [limit]. */
     suspend fun branchCommits(directory: String, limit: Int = 50): List<ai.kilocode.rpc.dto.CommitDto>
 
+    /**
+     * Stages and commits the uncommitted changes in [directory] with [message]: only [files] (paths relative
+     * to the checkout) when given, else everything, untracked files included. Git hooks run as usual.
+     */
+    suspend fun commit(directory: String, message: String, files: List<String>): ai.kilocode.rpc.dto.CommitResultDto
+
     /** Current git branch name for branch-scoped UI labels. */
     suspend fun branchName(directory: String): String?
 

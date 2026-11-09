@@ -491,6 +491,14 @@ data class CommitDto(
     val time: Long,
 )
 
+/** The outcome of committing a checkout's changes: the new commit's short hash, or git's reason it failed. */
+@Serializable
+data class CommitResultDto(
+    val ok: Boolean,
+    val sha: String? = null,
+    val error: String? = null,
+)
+
 @Serializable
 data class DiffFileDto(
     val file: String,

@@ -95,6 +95,35 @@ internal class GitComparison private constructor(
             }.toList()
         }
 
+        /**
+         * Stages [files] (or every change, untracked included, when empty) and commits them with [message].
+         * Paths that are absolute or leave the checkout are refused. Hooks may take a while, so git gets minutes.
+         */
+        fun commit(dir: Path, message: String, files: List<String>): ai.kilocode.rpc.dto.CommitResultDto {
+            val text = message.trim()
+            if (text.isEmpty()) return ai.kilocode.rpc.dto.CommitResultDto(false, error = "The commit message is empty.")
+            val root = dir.normalize()
+            val paths = files.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+            val bad = paths.firstOrNull { p ->
+                runCatching { Path.of(p).isAbsolute || !root.resolve(p).normalize().startsWith(root) }.getOrDefault(true)
+            }
+            if (bad != null) return ai.kilocode.rpc.dto.CommitResultDto(false, error = "Refusing a path outside the checkout: $bad")
+            val spec = if (paths.isEmpty()) emptyList() else listOf("--") + paths
+            val add = runGitCommand(root, listOf("add", "-A") + spec, COMMIT_TIMEOUT_MS)
+            if (!add.ok) return ai.kilocode.rpc.dto.CommitResultDto(false, error = reason(add))
+            val commit = runGitCommand(root, listOf("commit", "-m", text) + spec, COMMIT_TIMEOUT_MS)
+            if (!commit.ok) return ai.kilocode.rpc.dto.CommitResultDto(false, error = reason(commit))
+            val sha = runGitCommand(root, listOf("rev-parse", "--short", "HEAD")).stdout.trim().ifEmpty { null }
+            return ai.kilocode.rpc.dto.CommitResultDto(true, sha = sha)
+        }
+
+        private const val COMMIT_TIMEOUT_MS = 5 * 60_000
+
+        private fun reason(out: CmdOut): String = when {
+            out.timeout -> "git timed out"
+            else -> (out.stderr.trim().ifEmpty { out.stdout.trim() }).ifEmpty { "git exited with ${out.exit}" }
+        }
+
         private fun revision(dir: Path, ref: String): String? =
             git(dir, "rev-parse", "--verify", "--quiet", "$ref^{commit}", optional = true).trim().ifEmpty { null }
 
