@@ -128,6 +128,8 @@ internal class DiffEditorView(
     private val refreshing = AtomicBoolean(false)
     private val tree = buildFileTree(start)
     private val badge = DiffStatBadge(0, 0, inset = UiStyle.Gap.PAD)
+    private val viewedStore = DiffViewedStore.getInstance(project)
+    private val viewedLabel = JBLabel().apply { foreground = UiStyle.Colors.weak() }
     private val splitter = OnePixelSplitter(false, 0.25f)
     private val select = Debouncer<Int>(scope, parent) { show(it) }
     private val banner = EditorNotificationPanel(EditorNotificationPanel.Status.Warning).apply {
@@ -181,14 +183,16 @@ internal class DiffEditorView(
         }
         openFileAction.registerCustomShortcutSet(CommonShortcuts.getEditSource(), tree)
         installMenu()
+        installViewedToggle()
         // Tie the listener to the processor it observes, not to the long-lived parent: applyFiles
         // disposes the old processor on each refresh, and registering under parent would leak a
         // removal hook (holding the dead processor) for every refresh across the editor's lifetime.
         processor.addListener(DiffRequestProcessorListener { syncTree() }, processor)
-        splitter.firstComponent = buildTreePanel(tree, start, badge, processor.component, ::refresh)
+        splitter.firstComponent = buildTreePanel(tree, start, badge, viewedLabel, processor.component, ::refresh)
         splitter.secondComponent = processor.component
         processor.updateRequest()
         applyBadge(start)
+        applyViewed()
         select(start.firstOrNull()?.file)
         listen()
     }
@@ -217,11 +221,12 @@ internal class DiffEditorView(
         processor = processor(items, index)
         Disposer.register(parent, processor)
         processor.addListener(DiffRequestProcessorListener { syncTree() }, processor)
-        splitter.firstComponent = buildTreePanel(tree, items, badge, processor.component, ::refresh)
+        splitter.firstComponent = buildTreePanel(tree, items, badge, viewedLabel, processor.component, ::refresh)
         splitter.secondComponent = processor.component
         processor.updateRequest()
         Disposer.dispose(old)
         applyBadge(items)
+        applyViewed()
         select(items.getOrNull(index)?.file)
         root.revalidate()
         root.repaint()
@@ -267,11 +272,86 @@ internal class DiffEditorView(
     private fun installMenu() {
         val group = DefaultActionGroup(
             openFileAction,
+            ViewedAction(true),
+            ViewedAction(false),
             Separator.getInstance(),
             TreeAction(KiloBundle.message("diff.editor.refresh"), AllIcons.Actions.Refresh, ::refresh),
         )
         PopupHandler.installPopupMenu(tree, group, ActionPlaces.POPUP)
     }
+
+    /** Marks the files under the selected rows viewed or not viewed. */
+    private inner class ViewedAction(private val mark: Boolean) : DumbAwareAction(
+        KiloBundle.message(if (mark) "diff.editor.viewed.mark" else "diff.editor.viewed.unmark"),
+    ) {
+        override fun getActionUpdateThread() = ActionUpdateThread.EDT
+
+        override fun update(e: AnActionEvent) {
+            val leaves = selectedNodes().flatMap(::leaves)
+            e.presentation.isEnabledAndVisible = leaves.any { (it.userObject as Node).viewed != mark }
+        }
+
+        override fun actionPerformed(e: AnActionEvent) = setViewed(selectedNodes().flatMap(::leaves), mark)
+    }
+
+    private fun selectedNodes(): List<DefaultMutableTreeNode> =
+        tree.selectionPaths.orEmpty().mapNotNull { it.lastPathComponent as? DefaultMutableTreeNode }
+
+    // A click on the check box at the start of a row toggles that file, or every file under that folder.
+    private fun installViewedToggle() {
+        tree.addMouseListener(object : java.awt.event.MouseAdapter() {
+            override fun mousePressed(e: java.awt.event.MouseEvent) {
+                if (!javax.swing.SwingUtilities.isLeftMouseButton(e) || e.isShiftDown || e.isControlDown || e.isMetaDown) return
+                val node = viewedToggleAt(tree, e.point) ?: return
+                e.consume()
+                toggleViewed(node)
+            }
+        })
+    }
+
+    @RequiresEdt
+    internal fun toggleViewed(node: DefaultMutableTreeNode) {
+        val item = node.userObject as? Node ?: return
+        setViewed(leaves(node), !item.viewed)
+    }
+
+    @RequiresEdt
+    private fun setViewed(nodes: List<DefaultMutableTreeNode>, viewed: Boolean) {
+        val dir = params["directory"]
+        for (node in nodes) {
+            val file = (node.userObject as? Node)?.file ?: continue
+            viewedStore.set(dir, file, viewed)
+        }
+        applyViewed()
+    }
+
+    @RequiresEdt
+    private fun applyViewed() {
+        val root = tree.model.root as? DefaultMutableTreeNode ?: return
+        val dir = params["directory"]
+        fun walk(node: DefaultMutableTreeNode): Boolean {
+            val item = node.userObject as? Node ?: return false
+            val file = item.file
+            item.viewed = if (file != null) {
+                viewedStore.viewed(dir, file)
+            } else {
+                val kids = (0 until node.childCount).mapNotNull { node.getChildAt(it) as? DefaultMutableTreeNode }
+                // Evaluate every child so each row gets its own state, then roll up.
+                kids.map(::walk).let { it.isNotEmpty() && it.all { v -> v } }
+            }
+            return item.viewed
+        }
+        walk(root)
+        val done = files.count { viewedStore.viewed(dir, it) }
+        viewedLabel.text = if (done == 0) "" else KiloBundle.message("diff.editor.viewed.count", done, files.size)
+        viewedLabel.isVisible = done > 0
+        tree.repaint()
+    }
+
+    /** How many files are marked viewed, for tests. */
+    internal fun viewedCount(): Int = files.count { viewedStore.viewed(params["directory"], it) }
+
+    internal fun nodeForTest(path: String): DefaultMutableTreeNode? = find(tree.model.root as DefaultMutableTreeNode, path)
 
     @RequiresEdt
     private fun showOutdated() {
@@ -328,13 +408,16 @@ internal class DiffEditorView(
     private fun producer(file: DiffFileDto): DiffRequestProducer = object : DiffRequestProducer {
         override fun getName(): String = file.file
 
-        override fun process(context: UserDataHolder, indicator: ProgressIndicator) = diffRequest(project, file, branch, labels()).also {
+        override fun process(context: UserDataHolder, indicator: ProgressIndicator) = diffRequest(project, file, branch, labels(), contextFile(file)).also {
             it.putUserData(DIFF_FILE_KEY, file.file)
             review?.let { scope -> it.putUserData(ai.kilocode.client.review.REVIEW_SCOPE_KEY, scope) }
         }
     }
 
     private fun labels(): Pair<String, String> = diffLabels(params["source"], params)
+
+    private fun contextFile(file: DiffFileDto): com.intellij.openapi.vfs.VirtualFile? =
+        path(file)?.let { com.intellij.openapi.vfs.LocalFileSystem.getInstance().findFileByPath(it) }
 
     private fun syncTree() {
         if (disposed.get()) return
@@ -509,7 +592,7 @@ private fun compact(node: DefaultMutableTreeNode) {
     }
 }
 
-private fun buildTreePanel(tree: Tree, files: List<DiffFileDto>, badge: DiffStatBadge, target: JComponent, refresh: () -> Unit): JComponent {
+private fun buildTreePanel(tree: Tree, files: List<DiffFileDto>, badge: DiffStatBadge, viewed: JComponent, target: JComponent, refresh: () -> Unit): JComponent {
     val toolbar = ActionManager.getInstance().createActionToolbar(
         ActionPlaces.TOOLBAR,
         treeToolbarGroup(tree, refresh),
@@ -527,6 +610,7 @@ private fun buildTreePanel(tree: Tree, files: List<DiffFileDto>, badge: DiffStat
         add(
             Stack.horizontal(gap = UiStyle.Gap.sm()).apply {
                 border = JBUI.Borders.empty(0, 0, 0, UiStyle.Gap.pad())
+                next(viewed)
                 next(JBLabel(fileCount(files.size)).apply { foreground = UiStyle.Colors.weak() })
                 next(badge)
             },
@@ -639,6 +723,63 @@ private data class Stats(val additions: Int, val deletions: Int)
 private class Node(val name: String, val path: String, val dir: Boolean, val file: DiffFileDto?) {
     var additions: Int = file?.additions ?: 0
     var deletions: Int = file?.deletions ?: 0
+    var viewed: Boolean = false
+}
+
+private fun leaves(node: DefaultMutableTreeNode): List<DefaultMutableTreeNode> {
+    if ((node.userObject as? Node)?.file != null) return listOf(node)
+    return (0 until node.childCount).flatMap { leaves(node.getChildAt(it) as? DefaultMutableTreeNode ?: return@flatMap emptyList()) }
+}
+
+/** The row whose viewed check box is under [point], if the point is on one. */
+private fun viewedToggleAt(tree: JTree, point: java.awt.Point): DefaultMutableTreeNode? {
+    val path = tree.getPathForLocation(point.x, point.y) ?: return null
+    val bounds = tree.getPathBounds(path) ?: return null
+    if (point.x - bounds.x > Renderer.toggleWidth()) return null
+    return path.lastPathComponent as? DefaultMutableTreeNode
+}
+
+/** A small check box: an outline when not viewed, filled with a check mark when viewed. */
+private class ViewedIcon(private val checked: Boolean) : Icon {
+    override fun getIconWidth(): Int = JBUI.scale(14)
+
+    override fun getIconHeight(): Int = JBUI.scale(14)
+
+    override fun paintIcon(c: Component?, g: java.awt.Graphics, x: Int, y: Int) {
+        val g2 = g.create() as java.awt.Graphics2D
+        try {
+            g2.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON)
+            val pad = JBUI.scale(1)
+            val size = iconWidth - pad * 2
+            val arc = JBUI.scale(4)
+            if (checked) {
+                g2.color = ACCENT
+                g2.fillRoundRect(x + pad, y + pad, size, size, arc, arc)
+                g2.color = Color.WHITE
+                g2.stroke = java.awt.BasicStroke(JBUI.scale(1.6f), java.awt.BasicStroke.CAP_ROUND, java.awt.BasicStroke.JOIN_ROUND)
+                val s = size / 12f
+                val path = java.awt.geom.Path2D.Float().apply {
+                    moveTo(x + pad + 3f * s, y + pad + 6.2f * s)
+                    lineTo(x + pad + 5.2f * s, y + pad + 8.6f * s)
+                    lineTo(x + pad + 9.2f * s, y + pad + 3.8f * s)
+                }
+                g2.draw(path)
+            } else {
+                g2.color = BORDER
+                g2.stroke = java.awt.BasicStroke(JBUI.scale(1f))
+                g2.drawRoundRect(x + pad, y + pad, size - 1, size - 1, arc, arc)
+            }
+        } finally {
+            g2.dispose()
+        }
+    }
+
+    companion object {
+        private val ACCENT = com.intellij.ui.JBColor(0x3574F0, 0x3574F0)
+        private val BORDER = com.intellij.ui.JBColor(0xA8ADBD, 0x6F737A)
+        val ON = ViewedIcon(true)
+        val OFF = ViewedIcon(false)
+    }
 }
 
 private class DiffTree(model: TreeModel) : Tree(model) {
@@ -654,14 +795,23 @@ private class DiffTree(model: TreeModel) : Tree(model) {
 }
 
 private class Renderer : JPanel(BorderLayout()), TreeCellRenderer {
+    private val check = JBLabel().apply { border = JBUI.Borders.emptyRight(GAP) }
     private val text = SimpleColoredComponent()
     private val badge = DiffStatBadge(0, 0, DiffStatBadge.Variant.COMPACT)
 
     init {
-        UiStyle.Components.transparent(this, text)
+        UiStyle.Components.transparent(this, text, check)
         border = JBUI.Borders.empty(0, UiStyle.Gap.sm(), 0, UiStyle.Gap.xl())
+        add(check, BorderLayout.WEST)
         add(text, BorderLayout.CENTER)
         add(badge, BorderLayout.EAST)
+    }
+
+    companion object {
+        private const val GAP = 4
+
+        /** The width at the start of a row that toggles viewed: the left inset, the check box and a little slack. */
+        fun toggleWidth(): Int = UiStyle.Gap.sm() + ViewedIcon.OFF.iconWidth + JBUI.scale(GAP)
     }
 
     override fun getTreeCellRendererComponent(
@@ -677,9 +827,15 @@ private class Renderer : JPanel(BorderLayout()), TreeCellRenderer {
         val item = node?.userObject as? Node
         text.clear()
         text.icon = if (item?.dir == true) AllIcons.Nodes.Folder else AllIcons.FileTypes.Text
+        check.icon = if (item?.viewed == true) ViewedIcon.ON else ViewedIcon.OFF
+        check.toolTipText = KiloBundle.message(if (item?.viewed == true) "diff.editor.viewed.unmark" else "diff.editor.viewed.mark")
         val name = item?.name?.ifBlank { item.path }.orEmpty()
         val color = item?.file?.let(::fileStatus)?.color
-        if (color == null) text.append(name) else text.append(name, SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, color))
+        when {
+            item?.viewed == true -> text.append(name, SimpleTextAttributes.GRAYED_ATTRIBUTES)
+            color == null -> text.append(name)
+            else -> text.append(name, SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, color))
+        }
         // A folder's badge rolls up its descendants' stats, which is only meaningful while the
         // folder is collapsed. Once expanded the child rows carry their own badges, so hide the
         // folder aggregate to avoid duplicating the numbers. Leaf files always show their badge.

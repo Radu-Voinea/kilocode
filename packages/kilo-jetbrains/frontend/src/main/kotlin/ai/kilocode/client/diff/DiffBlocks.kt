@@ -18,6 +18,7 @@ internal fun diffRequest(
     dto: DiffFileDto,
     branch: String? = null,
     labels: Pair<String, String> = KiloBundle.message("diff.editor.side.base") to KiloBundle.message("diff.editor.side.current"),
+    context: com.intellij.openapi.vfs.VirtualFile? = null,
 ): DiffRequest {
     val sides = DiffPatchReconstruct.sides(dto)
     val type = FileTypeManager.getInstance().getFileTypeByFileName(dto.file)
@@ -27,16 +28,16 @@ internal fun diffRequest(
     val fallback = patch ?: KiloBundle.message("diff.editor.patch.unavailable")
     val full = dto.before != null && dto.after != null
     val left = when {
-        full -> factory.create(project, dto.before.orEmpty(), type)
+        full -> text(factory, project, dto.before.orEmpty(), type, context)
         DiffPatchReconstruct.added(dto.patch) -> factory.createEmpty()
-        sides.renderable -> factory.create(project, sides.before, type).numbered(sides.leftLines)
+        sides.renderable -> text(factory, project, sides.before, type, context).numbered(sides.leftLines)
         status == FileStatus.DELETED -> factory.create(project, fallback, type)
         else -> factory.createEmpty()
     }
     val right = when {
-        full -> factory.create(project, dto.after.orEmpty(), type)
+        full -> text(factory, project, dto.after.orEmpty(), type, context)
         DiffPatchReconstruct.deleted(dto.patch) -> factory.createEmpty()
-        sides.renderable -> factory.create(project, sides.after, type).numbered(sides.rightLines)
+        sides.renderable -> text(factory, project, sides.after, type, context).numbered(sides.rightLines)
         status == FileStatus.DELETED -> factory.createEmpty()
         else -> factory.create(project, fallback, type)
     }
@@ -44,6 +45,20 @@ internal fun diffRequest(
         it.putUserData(DiffUserDataKeys.FORCE_READ_ONLY, true)
     }
 }
+
+/**
+ * Diff text tied to the real file when it exists, so the IDE highlights it with the project's context and
+ * resolves its symbols: Ctrl+click (and Kilo's Shift+click) then go to definitions as in a VCS diff.
+ */
+private fun text(
+    factory: DiffContentFactory,
+    project: Project,
+    text: String,
+    type: com.intellij.openapi.fileTypes.FileType,
+    context: com.intellij.openapi.vfs.VirtualFile?,
+): DocumentContent =
+    if (context != null && context.isValid && !context.isDirectory) factory.create(project, text, context)
+    else factory.create(project, text, type)
 
 internal fun diffTitle(file: String, branch: String?): String {
     val name = branch.takeIf { !it.isNullOrBlank() } ?: return file

@@ -402,6 +402,46 @@ class KiloDiffEditorContentTest : BasePlatformTestCase() {
         }
     }
 
+    fun `test viewed mark persists across reloads until the file changes`() {
+        val parent = Disposer.newDisposable()
+        try {
+            DiffViewedStore.getInstance(project).loadState(DiffViewedStore.Data())
+            val editor = editor(files(), parent)
+            val node = editor.nodeForTest("src/App.kt")!!
+
+            editor.toggleViewed(node)
+            assertEquals(1, editor.viewedCount())
+            assertTrue(components(editor.component).filterIsInstance<JBLabel>().any { it.text == "1/2 viewed" })
+
+            editor.applyFiles(files(), "other")
+            assertEquals(1, editor.viewedCount())
+
+            val second = editor(files(), parent)
+            assertEquals(1, second.viewedCount())
+
+            editor.applyFiles(listOf(file("src/App.kt", 9, 1), file("test/AppTest.kt", 1, 1)), "feature/test")
+            assertEquals(0, editor.viewedCount())
+        } finally {
+            Disposer.dispose(parent)
+        }
+    }
+
+    fun `test folder toggle marks every file under it`() {
+        val parent = Disposer.newDisposable()
+        try {
+            DiffViewedStore.getInstance(project).loadState(DiffViewedStore.Data())
+            val editor = editor(listOf(file("src/A.kt", 1, 0), file("src/B.kt", 1, 0), file("C.kt", 1, 0)), parent)
+            val folder = editor.nodeForTest("src")!!
+
+            editor.toggleViewed(folder)
+            assertEquals(2, editor.viewedCount())
+            editor.toggleViewed(folder)
+            assertEquals(0, editor.viewedCount())
+        } finally {
+            Disposer.dispose(parent)
+        }
+    }
+
     fun `test reload preserves selected file`() {
         val parent = Disposer.newDisposable()
         try {

@@ -19,6 +19,7 @@
                              implementationClass="ai.kilocode.client.session.ui.prompt.PromptPasteActionHandler"
                              order="first"/>
         <diff.DiffExtension implementation="ai.kilocode.client.review.ReviewDiffExtension"/>
+        <diff.DiffExtension implementation="ai.kilocode.client.diff.DiffNavigationExtension"/>
 
         <notificationGroup id="Kilo Code"
                            displayType="BALLOON"
