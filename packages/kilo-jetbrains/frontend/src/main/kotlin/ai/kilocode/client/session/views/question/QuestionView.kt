@@ -731,14 +731,26 @@ class QuestionView(
 
             override fun scrollRectToVisible(aRect: Rectangle) {}
 
+            // Wrap at the width the layout actually gave this area; only before the first layout guess from
+            // an ancestor. Report a small width: asking for the ancestor's full width made option rows (radio
+            // + text) wider than the card, so their lines were clipped at the right edge instead of wrapping.
             private fun withWidth(fallback: Int): Dimension {
-                val width = space()
+                val width = if (this.width > 0) this.width else space()
                 if (width <= 0) return Dimension(super.getPreferredSize().width, fallback)
                 val old = size
                 setSize(width, Int.MAX_VALUE)
                 val size = super.getPreferredSize()
                 setSize(old)
-                return Dimension(width, size.height)
+                return Dimension(JBUI.scale(MIN_TEXT_WIDTH), size.height)
+            }
+
+            override fun getMinimumSize(): Dimension = Dimension(JBUI.scale(MIN_TEXT_WIDTH), preferredSize.height)
+
+            // A new width changes how many lines the text wraps to, so the rows above must re-measure.
+            override fun setBounds(x: Int, y: Int, width: Int, height: Int) {
+                val changed = width != this.width
+                super.setBounds(x, y, width, height)
+                if (changed && width > 0) javax.swing.SwingUtilities.invokeLater { if (isShowing) revalidate() }
             }
 
             private fun space(): Int {
@@ -850,3 +862,5 @@ class QuestionView(
     }
 
 }
+
+private const val MIN_TEXT_WIDTH = 40

@@ -227,6 +227,34 @@ class QuestionViewTest : BasePlatformTestCase() {
         assertEquals("description should use regularFont", style.regularFont, desc.font)
     }
 
+    fun `test long option descriptions wrap inside the card instead of running past it`() {
+        val long = "Compare src/libs/utils against the last release tag (git diff) and skip publishing when identical. " +
+            "No extra files, but needs tags fetched in CI."
+        view.show(
+            Question(
+                id = "wrap_test",
+                items = listOf(
+                    QuestionItem(
+                        question = "How should core detect that utils is unchanged?",
+                        header = "Detect",
+                        options = listOf(QuestionOption("Last release tag", long)),
+                        multiple = false,
+                        custom = false,
+                    )
+                ),
+            )
+        )
+        val root = realize(view, 320, 800)
+        UIUtil.dispatchAllInvocationEvents()
+        layoutTree(root)
+
+        val desc = findAll<JBTextArea>(view).first { it.text == long }
+        val right = javax.swing.SwingUtilities.convertPoint(desc, desc.width, 0, root).x
+        assertTrue("description should end inside the root, ended at $right", right <= root.width)
+        val line = desc.getFontMetrics(desc.font).height
+        assertTrue("description should wrap onto several lines, height=${desc.height}", desc.height >= line * 2)
+    }
+
     fun `test option row without description centers button beside label`() {
         view.show(
             Question(
