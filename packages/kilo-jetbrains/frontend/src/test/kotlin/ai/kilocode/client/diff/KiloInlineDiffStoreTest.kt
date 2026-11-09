@@ -125,6 +125,21 @@ class KiloInlineDiffStoreTest : BasePlatformTestCase() {
         }
     }
 
+    fun `test commit and push commits then pushes`() {
+        workspace.localDiffs += listOf(file("src/A.kt", 2, 1))
+        var committed: String? = null
+        val dialog = DiffCommitDialog(project, "/repo", coroutines.scope) { committed = it }
+        try {
+            waitFor { dialog.messageText().isNotBlank() }
+            dialog.commitAndPushForTest()
+            waitFor { committed != null }
+            assertEquals(listOf("/repo"), workspace.pushCalls)
+            assertEquals(1, workspace.commitCalls.size)
+        } finally {
+            if (!dialog.isDisposed) com.intellij.openapi.util.Disposer.dispose(dialog.disposable)
+        }
+    }
+
     fun `test a failed commit keeps the dialog open`() {
         workspace.localDiffs += listOf(file("src/A.kt", 2, 1))
         workspace.commitResult = ai.kilocode.rpc.dto.CommitResultDto(false, error = "hook rejected")

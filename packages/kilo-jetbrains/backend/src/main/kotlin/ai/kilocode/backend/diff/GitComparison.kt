@@ -119,6 +119,40 @@ internal class GitComparison private constructor(
 
         private const val COMMIT_TIMEOUT_MS = 5 * 60_000
 
+        /**
+         * Pushes the current branch: to its upstream when it has one, else to `origin` (or the only remote)
+         * with `-u` so later pushes know where to go. Git never prompts: missing credentials fail with
+         * git's message instead of hanging. [ok] carries `remote/branch` in `sha`.
+         */
+        fun push(dir: Path): ai.kilocode.rpc.dto.CommitResultDto {
+            val root = dir.normalize()
+            val branch = runGitCommand(root, listOf("symbolic-ref", "--quiet", "--short", "HEAD")).stdout.trim()
+            if (branch.isEmpty()) return ai.kilocode.rpc.dto.CommitResultDto(false, error = "HEAD is detached; check out a branch to push.")
+            val env = mapOf("GIT_TERMINAL_PROMPT" to "0", "GCM_INTERACTIVE" to "never")
+            val upstream = runGitCommand(root, listOf("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"))
+            val args: List<String>
+            val target: String
+            if (upstream.ok && upstream.stdout.isNotBlank()) {
+                args = listOf("push")
+                target = upstream.stdout.trim()
+            } else {
+                val remotes = runGitCommand(root, listOf("remote")).stdout.lines().map { it.trim() }.filter { it.isNotEmpty() }
+                val remote = when {
+                    "origin" in remotes -> "origin"
+                    remotes.size == 1 -> remotes.single()
+                    remotes.isEmpty() -> return ai.kilocode.rpc.dto.CommitResultDto(false, error = "This repository has no remote to push to.")
+                    else -> return ai.kilocode.rpc.dto.CommitResultDto(
+                        false, error = "No upstream is set and there is no origin remote; set one with git push -u <remote> $branch.",
+                    )
+                }
+                args = listOf("push", "-u", remote, "HEAD:refs/heads/$branch")
+                target = "$remote/$branch"
+            }
+            val out = runGitCommand(root, args, COMMIT_TIMEOUT_MS, env)
+            if (!out.ok) return ai.kilocode.rpc.dto.CommitResultDto(false, error = reason(out))
+            return ai.kilocode.rpc.dto.CommitResultDto(true, sha = target)
+        }
+
         private fun reason(out: CmdOut): String = when {
             out.timeout -> "git timed out"
             else -> (out.stderr.trim().ifEmpty { out.stdout.trim() }).ifEmpty { "git exited with ${out.exit}" }
@@ -272,10 +306,15 @@ internal fun gitBudget(args: List<String>): Int {
     return if (head in PROBES) GIT_PROBE_TIMEOUT_MS else GIT_READ_TIMEOUT_MS
 }
 
-internal fun runGitCommand(dir: Path, args: List<String>, timeoutMs: Int = gitBudget(args)): CmdOut {
+internal fun runGitCommand(
+    dir: Path,
+    args: List<String>,
+    timeoutMs: Int = gitBudget(args),
+    env: Map<String, String> = emptyMap(),
+): CmdOut {
     return try {
         val cmd = GeneralCommandLine(listOf("git") + args).withWorkDirectory(dir.toFile())
-            .withCharset(StandardCharsets.UTF_8).withEnvironment("LC_ALL", "C")
+            .withCharset(StandardCharsets.UTF_8).withEnvironment("LC_ALL", "C").withEnvironment(env)
         val out = CapturingProcessHandler(cmd).runProcess(timeoutMs)
         if (out.isTimeout) {
             LOG.warn("git command timed out: dir=$dir args=${args.joinToString(" ")} ms=$timeoutMs")

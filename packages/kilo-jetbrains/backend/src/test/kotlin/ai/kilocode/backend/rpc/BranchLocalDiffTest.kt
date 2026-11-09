@@ -420,6 +420,35 @@ class BranchLocalDiffTest {
         assertTrue(empty.error.orEmpty().isNotBlank())
     }
 
+    @Test
+    fun `push sets the upstream the first time and reports when there is no remote`() = runBlocking {
+        init()
+        git(repo, "config", "commit.gpgsign", "false")
+        git(repo, "config", "core.hooksPath", hooks.toString())
+        val dir = worktree()
+        val none = api.push(dir.toString())
+        assertFalse(none.ok)
+        assertTrue(none.error.orEmpty().contains("no remote"), none.error)
+
+        val remote = Files.createDirectory(root.resolve("remote.git"))
+        git(remote, "init", "--bare")
+        git(repo, "remote", "add", "origin", remote.toString())
+        Files.writeString(dir.resolve("pushed.txt"), "pushed\n")
+        assertTrue(api.commit(dir.toString(), "feat: push me", emptyList()).ok)
+
+        val first = api.push(dir.toString())
+        assertTrue(first.ok, first.error)
+        assertEquals("origin/feature", first.sha)
+        assertEquals("origin/feature", git(dir, "rev-parse", "--abbrev-ref", "@{u}").trim())
+        assertEquals(git(dir, "rev-parse", "HEAD").trim(), git(remote, "rev-parse", "refs/heads/feature").trim())
+
+        Files.writeString(dir.resolve("pushed.txt"), "again\n")
+        assertTrue(api.commit(dir.toString(), "fix: again", emptyList()).ok)
+        val second = api.push(dir.toString())
+        assertTrue(second.ok, second.error)
+        assertEquals(git(dir, "rev-parse", "HEAD").trim(), git(remote, "rev-parse", "refs/heads/feature").trim())
+    }
+
     private fun init() {
         git(repo, "init", "--initial-branch=main")
         git(repo, "config", "user.email", "test@kilo.ai")

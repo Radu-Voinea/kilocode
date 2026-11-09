@@ -180,6 +180,15 @@ class FakeWorkspaceRpcApi : KiloWorkspaceRpcApi {
         return commitResult
     }
 
+    val pushCalls = mutableListOf<String>()
+    var pushResult = ai.kilocode.rpc.dto.CommitResultDto(true, sha = "origin/feature")
+
+    override suspend fun push(directory: String): ai.kilocode.rpc.dto.CommitResultDto {
+        assertNotEdt("push")
+        pushCalls.add(directory)
+        return pushResult
+    }
+
     override suspend fun branchCommits(directory: String, limit: Int): List<ai.kilocode.rpc.dto.CommitDto> {
         assertNotEdt("branchCommits")
         return commits.take(limit)

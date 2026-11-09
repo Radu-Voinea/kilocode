@@ -51,6 +51,9 @@ internal class DiffCommitDialog(
     private val generate = JButton(KiloBundle.message("diff.commit.generate"), AllIcons.Actions.Lightning).apply {
         addActionListener { generate() }
     }
+    private val pushAction = object : DialogWrapperAction(KiloBundle.message("diff.commit.okPush")) {
+        override fun doAction(e: java.awt.event.ActionEvent?) = commit(push = true)
+    }
     private var paths: List<String> = emptyList()
     private var job: Job? = null
     private var busy = false
@@ -81,6 +84,8 @@ internal class DiffCommitDialog(
 
     override fun getPreferredFocusedComponent(): JComponent = message
 
+    override fun createActions(): Array<javax.swing.Action> = arrayOf(okAction, pushAction, cancelAction)
+
     override fun doValidate(): ValidationInfo? {
         if (paths.isNotEmpty() && selected().isEmpty()) return ValidationInfo(KiloBundle.message("diff.commit.noFiles"), files)
         if (message.text.isBlank()) return ValidationInfo(KiloBundle.message("diff.commit.noMessage"), message)
@@ -106,6 +111,8 @@ internal class DiffCommitDialog(
     internal fun filesForTest(): List<String> = paths
 
     internal fun commitForTest() = doOKAction()
+
+    internal fun commitAndPushForTest() = commit(push = true)
 
     private fun load() {
         working(KiloBundle.message("diff.commit.loading"))
@@ -160,29 +167,48 @@ internal class DiffCommitDialog(
         }
     }
 
-    override fun doOKAction() {
+    override fun doOKAction() = commit(push = false)
+
+    private fun commit(push: Boolean) {
         if (busy || !okAction.isEnabled) return
+        if (doValidate()?.let { setErrorText(it.message, it.component); true } == true) return
         val include = selected()
         val text = message.text
         working(KiloBundle.message("diff.commit.committing"))
         job = cs.launch {
-            val result = runCatching { service<KiloWorkspaceService>().commit(directory, text, include) }
-                .getOrElse {
-                    if (it is CancellationException) throw it
-                    CommitResultDto(false, error = it.message ?: it.javaClass.simpleName)
+            val workspace = service<KiloWorkspaceService>()
+            val result = safely { workspace.commit(directory, text, include) }
+            if (!result.ok) {
+                withContext(Dispatchers.Main) {
+                    if (!isDisposed) idle(KiloBundle.message("diff.commit.failed", result.error.orEmpty()))
                 }
+                return@launch
+            }
+            if (push) withContext(Dispatchers.Main) { if (!isDisposed) working(KiloBundle.message("diff.commit.pushing")) }
+            val pushed = if (push) safely { workspace.push(directory) } else null
             withContext(Dispatchers.Main) {
-                if (isDisposed) return@withContext
-                if (!result.ok) {
-                    idle(KiloBundle.message("diff.commit.failed", result.error.orEmpty()))
-                    return@withContext
+                if (!isDisposed) close(OK_EXIT_CODE)
+                val subject = text.lineSequence().first()
+                when {
+                    pushed == null -> KiloNotifications.info(project, KiloBundle.message("diff.commit.done", result.sha.orEmpty()), subject)
+                    pushed.ok -> KiloNotifications.info(
+                        project, KiloBundle.message("diff.commit.donePushed", result.sha.orEmpty(), pushed.sha.orEmpty()), subject,
+                    )
+                    // The commit stands; only the push needs another try.
+                    else -> KiloNotifications.error(
+                        project, KiloBundle.message("diff.commit.pushFailed", result.sha.orEmpty()), pushed.error,
+                    )
                 }
-                close(OK_EXIT_CODE)
-                KiloNotifications.info(project, KiloBundle.message("diff.commit.done", result.sha.orEmpty()), text.lineSequence().first())
                 committed(result.sha)
             }
         }
     }
+
+    private suspend fun safely(call: suspend () -> CommitResultDto): CommitResultDto =
+        runCatching { call() }.getOrElse {
+            if (it is CancellationException) throw it
+            CommitResultDto(false, error = it.message ?: it.javaClass.simpleName)
+        }
 
     private fun working(text: String) {
         busy = true
@@ -190,6 +216,7 @@ internal class DiffCommitDialog(
         status.text = text
         generate.isEnabled = false
         isOKActionEnabled = false
+        pushAction.isEnabled = false
     }
 
     private fun idle(text: String) {
@@ -198,5 +225,6 @@ internal class DiffCommitDialog(
         status.text = text
         generate.isEnabled = paths.isNotEmpty()
         isOKActionEnabled = paths.isNotEmpty()
+        pushAction.isEnabled = paths.isNotEmpty()
     }
 }

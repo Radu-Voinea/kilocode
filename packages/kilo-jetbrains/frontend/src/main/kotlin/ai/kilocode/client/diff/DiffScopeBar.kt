@@ -73,6 +73,7 @@ internal class DiffScopeBar(
     private val cs: CoroutineScope,
     parent: Disposable,
     private val commit: (() -> Unit)? = null,
+    private val push: (() -> Unit)? = null,
     private val changed: (String, Boolean) -> Unit,
 ) {
     private val directory = params["directory"].orEmpty()
@@ -93,6 +94,18 @@ internal class DiffScopeBar(
     ).apply {
         toolTipText = KiloBundle.message("diff.commit.button.tooltip")
         addActionListener { commit?.invoke() }
+    }
+    internal val pushButton = javax.swing.JButton(
+        KiloBundle.message("diff.push.button"),
+        com.intellij.icons.AllIcons.Vcs.Push,
+    ).apply {
+        toolTipText = KiloBundle.message("diff.push.button.tooltip")
+        addActionListener { push?.invoke() }
+    }
+
+    /** Disables the Push button while a push runs. */
+    internal fun pushing(value: Boolean) {
+        pushButton.isEnabled = !value
     }
 
     // One row that never wraps: long commit subjects would otherwise make the combo wider than the editor,
@@ -115,6 +128,9 @@ internal class DiffScopeBar(
         add(JPanel().apply { isOpaque = false }, c.apply { gridx = 3; weightx = 1.0; fill = java.awt.GridBagConstraints.HORIZONTAL })
         if (commit != null) {
             add(commitButton, c.apply { gridx = 4; weightx = 0.0; fill = java.awt.GridBagConstraints.NONE })
+        }
+        if (push != null) {
+            add(pushButton, c.apply { gridx = 5; weightx = 0.0; insets = java.awt.Insets(0, gap, 0, 0) })
         }
     }
 

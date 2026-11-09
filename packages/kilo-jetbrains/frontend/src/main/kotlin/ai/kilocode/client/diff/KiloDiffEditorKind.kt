@@ -115,6 +115,26 @@ internal object KiloDiffEditorKind : KiloEditorKind {
                         service.refresh(params, ::render)
                     }.show()
                 },
+                push = {
+                    val dir = params["directory"].orEmpty()
+                    bar?.pushing(true)
+                    service.scope.launch {
+                        val result = runCatching { service<ai.kilocode.client.app.KiloWorkspaceService>().push(dir) }
+                            .getOrElse {
+                                if (it is kotlinx.coroutines.CancellationException) throw it
+                                ai.kilocode.rpc.dto.CommitResultDto(false, error = it.message ?: it.javaClass.simpleName)
+                            }
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                            bar?.pushing(false)
+                            if (result.ok) {
+                                ai.kilocode.client.KiloNotifications.info(project, ai.kilocode.client.plugin.KiloBundle.message("diff.push.done", result.sha.orEmpty()))
+                            } else {
+                                ai.kilocode.client.KiloNotifications.error(project, ai.kilocode.client.plugin.KiloBundle.message("diff.push.failed"), result.error)
+                            }
+                            bar?.reload()
+                        }
+                    }
+                },
             )
             outer.add(bar.component, BorderLayout.NORTH)
         }

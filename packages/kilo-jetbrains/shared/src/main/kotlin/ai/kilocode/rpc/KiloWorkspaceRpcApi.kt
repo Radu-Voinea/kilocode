@@ -86,6 +86,9 @@ interface KiloWorkspaceRpcApi : RemoteApi<Unit> {
      */
     suspend fun commit(directory: String, message: String, files: List<String>): ai.kilocode.rpc.dto.CommitResultDto
 
+    /** Pushes the checkout's current branch (setting its upstream the first time); `sha` names the target. */
+    suspend fun push(directory: String): ai.kilocode.rpc.dto.CommitResultDto
+
     /** Current git branch name for branch-scoped UI labels. */
     suspend fun branchName(directory: String): String?
 

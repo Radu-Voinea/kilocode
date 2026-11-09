@@ -239,6 +239,9 @@ class KiloWorkspaceService internal constructor(
         call { commit(directory, message, files) }
 
     @RequiresBackgroundThread
+    suspend fun push(directory: String): ai.kilocode.rpc.dto.CommitResultDto = call { push(directory) }
+
+    @RequiresBackgroundThread
     suspend fun branchName(directory: String): String? {
         return try {
             call { branchName(directory) }
